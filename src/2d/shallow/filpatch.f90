@@ -19,7 +19,7 @@ recursive subroutine filrecur(level,nvar,valbig,aux,naux,t,mx,my, &
     use amr_module, only: intratx, intraty, iregsz, jregsz
     use amr_module, only: timeSetaux, NEEDS_TO_BE_SET
 
-    use geoclaw_module, only: sea_level, dry_tolerance
+    use geoclaw_module, only: sea_level, dry_tolerance, variable_sea_level
     use topo_module, only: topo_finalized
 
     implicit none
@@ -79,6 +79,8 @@ recursive subroutine filrecur(level,nvar,valbig,aux,naux,t,mx,my, &
     real(kind=8) :: valcrse((ihi-ilo+3) * (jhi-jlo+3) * nvar)   ! NB this is a 1D array 
     real(kind=8) :: auxcrse((ihi-ilo+3) * (jhi-jlo+3) * naux)  
  
+    real(kind=8) :: xc, yc, vsea_level
+    real(kind=8), external :: sea_level_fcn
 
     mx_patch = ihi-ilo + 1 ! nrowp
     my_patch = jhi-jlo + 1 
@@ -215,14 +217,24 @@ recursive subroutine filrecur(level,nvar,valbig,aux,naux,t,mx,my, &
         fine_mass = 0.d0
         slope = 0.d0
 
+        if (.not. variable_sea_level) then
+            vsea_level = sea_level
+        endif
+
         ! Calculate surface elevation eta using dry limiting
         do j_coarse = 1, my_coarse
             do i_coarse = 1, mx_coarse
                 h = valcrse(ivalc(1,i_coarse,j_coarse))
                 b = auxcrse(iauxc(i_coarse,j_coarse))
 
+                if (variable_sea_level) then
+                    xc = xlow_coarse + (i_coarse - 0.5d0)*dx_coarse
+                    yc = ylow_coarse + (j_coarse - 0.5d0)*dy_coarse
+                    vsea_level = sea_level_fcn(xc,yc,t)
+                  endif
+
                 if (h < dry_tolerance) then
-                    eta_coarse(i_coarse,j_coarse) = sea_level
+                    eta_coarse(i_coarse,j_coarse) = vsea_level
                 else
                     eta_coarse(i_coarse,j_coarse) = h + b
                 endif

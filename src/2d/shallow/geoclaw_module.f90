@@ -27,6 +27,8 @@ module geoclaw_module
     ! ========================================================================
     real(kind=8) :: grav, earth_radius, sea_level
     integer :: coordinate_system
+    logical, parameter :: variable_sea_level = .true.
+                          ! If True then sea_level_fcn(x,y,t) is used
 
     ! Rotational velocity of Earth
     real(kind=8), parameter :: omega = 2.0d0 * pi / 86164.2d0

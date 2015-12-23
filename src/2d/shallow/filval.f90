@@ -19,7 +19,7 @@ subroutine filval(val, mitot, mjtot, dx, dy, level, time,  mic, &
     use amr_module, only: outunit, NEEDS_TO_BE_SET
 
     use topo_module, only: aux_finalized
-    use geoclaw_module, only: dry_tolerance, sea_level
+    use geoclaw_module, only: dry_tolerance, sea_level, variable_sea_level
     use refinement_module, only: varRefTime
     use topo_module, only: aux_finalized
 
@@ -48,6 +48,9 @@ subroutine filval(val, mitot, mjtot, dx, dy, level, time,  mic, &
     integer :: clock_start, clock_finish, clock_rate
     integer :: nx, ny
     real(kind=8) setflags(mitot,mjtot),maxauxdif
+
+    real(kind=8) :: xc, yc, vsea_level
+    real(kind=8), external :: sea_level_fcn
 
     ! External function definitions
     real(kind=8) :: get_max_speed
@@ -151,15 +154,26 @@ subroutine filval(val, mitot, mjtot, dx, dy, level, time,  mic, &
     ! before interpolating:
     !-----------------------------
 
+    if (.not. variable_sea_level) then
+        vsea_level = sea_level
+    endif
+
     ! Prepare slopes - use min-mod limiters
     do j=2, mjc-1
         do i=2, mic-1
             fineflag(1) = .false.
+
+            if (variable_sea_level) then
+                xc = xl + (i-0.5d0)*dx_coarse
+                yc = yb + (j-0.5d0)*dy_coarse
+                vsea_level = sea_level_fcn(xc,yc,time)
+              endif
+
             ! interpolate eta to find depth
             do ii=-1,1
                 coarseval(2+ii) = valc(1,i+ii,j)  + auxc(1,i+ii,j)
                 if (valc(1,i+ii,j)  <= dry_tolerance) then
-                    coarseval(2+ii)=sea_level
+                    coarseval(2+ii) = vsea_level
                 end if
             end do
             s1p = coarseval(3) - coarseval(2)
@@ -171,7 +185,7 @@ subroutine filval(val, mitot, mjtot, dx, dy, level, time,  mic, &
             do jj=-1,1
                 coarseval(2+jj) = valc(1,i,j+jj) + auxc(1,i,j+jj)
                 if (valc(1,i,j+jj) <= dry_tolerance) then
-                    coarseval(2+jj)=sea_level
+                    coarseval(2+jj)=vsea_level
                 end if
             end do
             s1p = coarseval(3) - coarseval(2)
