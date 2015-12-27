@@ -24,7 +24,7 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
                        tolsp,q,aux,amrflags,DONTFLAG,DOFLAG)
 
     use amr_module, only: mxnest, t0
-    use geoclaw_module, only:dry_tolerance, sea_level
+    use geoclaw_module, only:dry_tolerance, sea_level, variable_sea_level
     use geoclaw_module, only: spherical_distance, coordinate_system
 
     use topo_module, only: tlowtopo,thitopo,xlowtopo,xhitopo,ylowtopo,yhitopo
@@ -67,8 +67,16 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
     ! Storm specific variables
     real(kind=8) :: R_eye(2), wind_speed
 
+    ! variable sea_level support:
+    real(kind=8) :: vsea_level
+    real(kind=8), external :: sea_level_fcn
+
     ! Initialize flags
     amrflags = DONTFLAG
+
+    if (.not. variable_sea_level) then
+        vsea_level = sea_level
+    endif
 
     ! Loop over interior points on this grid
     ! (i,j) grid cell is [x_low,x_hi] x [y_low,y_hi], cell center at (x_c,y_c)
@@ -176,8 +184,12 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
                 if (q(1,i,j) > dry_tolerance) then
                     eta = q(1,i,j) + aux(1,i,j)
 
+                    if (variable_sea_level) then
+                        vsea_level = sea_level_fcn(x_c,y_c,t)
+                      endif
+
                     ! Check wave criteria
-                    if (abs(eta - sea_level) > wave_tolerance) then
+                    if (abs(eta - vsea_level) > wave_tolerance) then
                         ! Check to see if we are near shore
                         if (q(1,i,j) < deep_depth) then
                             amrflags(i,j) = DOFLAG
