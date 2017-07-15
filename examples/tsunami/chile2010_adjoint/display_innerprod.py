@@ -19,8 +19,10 @@ def main():
     
     # Number of levels to consider
     levels = [1,2,3]
+    make_plot(forward_frameno, adjoint_frameno, levels)
     # ----------------------------------
 
+def make_plot(forward_frameno, adjoint_frameno, levels=[1,2,3]):
     plotdata_f = ClawPlotData()
     plotdata_f = setplot.setplot(plotdata_f)
     plotdata_f.outdir = '_output'
@@ -77,12 +79,14 @@ def main():
                 eta = q[3,:,:]
                 land = numpy.ma.masked_where(h>0.0, eta)
                 pcolor(xc_edges, yc_edges, land, cmap=geoplot.land_colors)
+                
 
             # done with patches on current level
         # done looping over patches
     # done looping over levels
     
     axis([-120,-60, -60,0])
+    title('Forward t = %g, Adjoint t = -%g' % (framesoln_f.t, framesoln_a.t))
     show()
 
 #------------------------------------------------------------------
