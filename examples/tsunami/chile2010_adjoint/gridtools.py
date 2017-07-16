@@ -129,8 +129,10 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
 
     from numpy import ma  # for masked arrays
 
-    x = np.linspace(-110,-65,181)
-    y = np.linspace(-60,0,241)
+    #x = np.linspace(-110,-65,181)
+    #y = np.linspace(-60,0,241)
+    x = np.linspace(-110,-65,91)
+    y = np.linspace(-60,0,121)
     xout,yout = np.meshgrid(x,y,indexing='ij')
 
     frame_f = load_frame(frameno_f, outdir_f)
@@ -163,7 +165,7 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
     plt.clim(-.2,.2)
     plt.plot([-86.392], [-17.975],'ko')
     land = ma.masked_where(q_f[0,:,:]>0, q_f[3,:,:])
-    plt.contourf(xout, yout, land, [0,10000], 'g')
+    plt.contourf(xout, yout, land, [0,10000], colors=['g'])
     plt.title('Forward solution at t = %g' % t_f)
     plt.gca().set_aspect(1./np.cos(-30*np.pi/180.))
 
@@ -171,7 +173,7 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
     plt.pcolor(xout,yout,inner_product,cmap=colormaps.white_red)
     plt.clim(0,0.0001)
     plt.plot([-86.392], [-17.975],'ko')
-    plt.contourf(xout, yout, land, [0,10000], 'g')
+    plt.contourf(xout, yout, land, [0,10000], colors=['g'])
     plt.title('Inner product')
     plt.gca().set_aspect(1./np.cos(-30*np.pi/180.))
 
@@ -179,7 +181,7 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
     plt.pcolor(xout,yout,eta_a,cmap=geoplot.tsunami_colormap)
     plt.clim(-.002,.002)
     plt.plot([-86.392], [-17.975],'ko')
-    plt.contourf(xout, yout, land, [0,10000], 'g')
+    plt.contourf(xout, yout, land, [0,10000], colors=['g'])
     plt.title('Adjoint solution at t = -%g' % t_a)
     plt.gca().set_aspect(1./np.cos(-30*np.pi/180.))
 
