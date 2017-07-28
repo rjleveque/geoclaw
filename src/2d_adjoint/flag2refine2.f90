@@ -101,6 +101,7 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
               y_hi > ylowtopo(m) .and. y_low < yhitopo(m) ) then
 
               amrflags(i,j) = DOFLAG
+              aux(innerprod_index,i,j) = 1.d10 ! indicate amr forced
               cycle x_loop
             endif
           endif
@@ -114,6 +115,7 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
               y_hi > regions(m)%y_low .and. y_low < regions(m)%y_hi ) then
 
               amrflags(i,j) = DOFLAG
+              aux(innerprod_index,i,j) = 1.d10 ! indicate amr forced
               cycle x_loop
             endif
           endif
@@ -128,6 +130,7 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
             y_hi > ylowdtopo(m) .and. y_low < yhidtopo(m)) then
 
             amrflags(i,j) = DOFLAG
+            aux(innerprod_index,i,j) = 1.d10 ! indicate amr forced
             cycle x_loop
           endif
         enddo
@@ -142,6 +145,7 @@ subroutine flag2refine2(mx,my,mbc,mbuff,meqn,maux,xlower,ylower,dx,dy,t,level, &
             y_hi > y_low_qinit .and. y_low < y_hi_qinit) then
 
             amrflags(i,j) = DOFLAG
+            aux(innerprod_index,i,j) = 1.d10 ! indicate amr forced
             cycle x_loop
           endif
         endif
