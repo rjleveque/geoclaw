@@ -124,6 +124,16 @@ def load_frame(frameno, outdir='_output'):
     framesoln = plotdata.getframe(frameno, plotdata.outdir)
     return framesoln
 
+def timeformat(t):
+    from numpy import mod
+    hours = int(t/3600.)
+    tmin = mod(t,3600.)
+    min = int(tmin/60.)
+    sec = int(mod(tmin,60.))
+    timestr = '%s:%s:%s' % (hours,str(min).zfill(2),str(sec).zfill(2))
+    return timestr
+
+
 def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
                outdir_a='adjoint/_output'):
 
@@ -146,8 +156,8 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
     inner_product = abs(eta_f*eta_a + q_f[1,:,:]*q_a[1,:,:] + \
                     q_f[2,:,:]*q_a[2,:,:])
 
-    t_f = frame_f.t / 3600.
-    t_a = frame_a.t / 3600.
+    t_f = frame_f.t
+    t_a = frame_a.t
     #return eta_f, t_f, eta_a, t_a, inner_product
 
     #def test_adjoint_ip_chile2010(frameno_f=10, frameno_a=6):
@@ -166,12 +176,13 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
     plt.plot([-86.392], [-17.975],'ko')
     land = ma.masked_where(q_f[0,:,:]>0, q_f[3,:,:])
     plt.contourf(xout, yout, land, [0,10000], colors=['g'])
-    plt.title('Forward solution at t = %g' % t_f)
+    timestr = timeformat(t_f)
+    plt.title('Forward solution at time %s' % timestr)
     plt.gca().set_aspect(1./np.cos(-30*np.pi/180.))
 
     plt.subplot(132)
     plt.pcolor(xout,yout,inner_product,cmap=colormaps.white_red)
-    plt.clim(0,0.0001)
+    plt.clim(0,0.001)
     plt.plot([-86.392], [-17.975],'ko')
     plt.contourf(xout, yout, land, [0,10000], colors=['g'])
     plt.title('Inner product')
@@ -181,8 +192,10 @@ def adjoint_ip_chile2010(frameno_f, frameno_a, outdir_f='_output',
     plt.pcolor(xout,yout,eta_a,cmap=geoplot.tsunami_colormap)
     plt.clim(-.002,.002)
     plt.plot([-86.392], [-17.975],'ko')
+    land = ma.masked_where(q_a[0,:,:]>0, q_a[3,:,:])
     plt.contourf(xout, yout, land, [0,10000], colors=['g'])
-    plt.title('Adjoint solution at t = -%g' % t_a)
+    timestr = timeformat(t_a)
+    plt.title('Adjoint time %s before time of interest' % timestr)
     plt.gca().set_aspect(1./np.cos(-30*np.pi/180.))
 
 
