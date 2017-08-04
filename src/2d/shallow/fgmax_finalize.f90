@@ -8,16 +8,24 @@ subroutine fgmax_finalize()
 
     implicit none
     character(30) :: fname
-    character(1) :: cfg,cma
-    integer :: k,ifg,level,mv,ma
+    character(1) :: cma
+    character(4) :: cfgno
+    integer :: k,ifg,level,mv,ma,ipos,idigit,ifg1
     type(fgrid), pointer :: fg
 
+    cfgno = '0000'
     do ifg=1,FG_num_fgrids
 
         fg => FG_fgrids(ifg)   
 
-        cfg = char(ichar('0') + ifg)
-        fname = 'fort.FG' // cfg // '.valuemax'
+        ifg1 = ifg
+        do ipos=4,1,-1
+            idigit = mod(ifg1,10)
+            cfgno(ipos:ipos) = char(ichar('0') + idigit)
+            ifg1 = ifg1/10
+            enddo
+
+        fname = 'fort.FG' // cfgno // '.valuemax'
         print *, 'Writing to file ', fname
         open(unit=FG_UNIT,file=trim(fname),status='unknown',form='formatted')
 
@@ -38,7 +46,7 @@ subroutine fgmax_finalize()
 
         do ma=1,FG_NUM_AUX
             cma = char(ichar('0') + ma)
-            fname = 'fort.FG' // cfg // '.aux' // cma
+            fname = 'fort.FG' // cfgno // '.aux' // cma
             print *, 'Writing to file ', fname
             open(unit=FG_UNIT,file=trim(fname),status='unknown',form='formatted')
 
