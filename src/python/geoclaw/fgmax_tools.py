@@ -292,14 +292,15 @@ class FGmaxGrid(object):
         if outdir is not None:
             self.outdir = outdir
     
-        fname = self.outdir + '/fort.FG%s.valuemax' % self.fgno
+        fname = os.path.join(self.outdir, 'fort.FG%s.valuemax' \
+                % str(self.fgno).zfill(4))
         if not os.path.isfile(fname):
             raise IOError("File not found: %s" % fname)
         print("Reading %s ..." % fname)
         d = numpy.loadtxt(fname)
     
-        fname = os.path.join(self.outdir, '/fort.FG%s.aux1' % self.fgno)
-        fname = self.outdir + '/fort.FG%s.aux1' % self.fgno
+        fname = os.path.join(self.outdir, 'fort.FG%s.aux1' \
+                % str(self.fgno).zfill(4))
         if not os.path.isfile(fname):
             raise IOError("File not found: %s" % fname)
         print("Reading %s ..." % fname)
