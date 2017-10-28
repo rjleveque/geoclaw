@@ -28,6 +28,9 @@ module geoclaw_module
     real(kind=8) :: grav, earth_radius, sea_level
     integer :: coordinate_system
 
+    real(kind=8), parameter :: rho = 1025.d0  ! density of sea water
+
+
     ! Forcing
     ! friction
     real(kind=8) :: friction_depth, friction_coefficient, friction_forcing

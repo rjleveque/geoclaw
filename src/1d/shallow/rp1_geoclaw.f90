@@ -31,7 +31,7 @@ subroutine rp1(maxmx,meqn,mwaves,maux,mbc,mx,ql,qr,auxl,auxr,fwave,s,amdq,apdq)
 !
 !        to call other point-wise Riemann solvers alter the call on line 177
 
-    use geoclaw_module, only: dry_tolerance, grav
+    use geoclaw_module, only: dry_tolerance, grav, rho
 
     implicit none
 
@@ -52,7 +52,7 @@ subroutine rp1(maxmx,meqn,mwaves,maux,mbc,mx,ql,qr,auxl,auxr,fwave,s,amdq,apdq)
     double precision :: bR,bL,sL,sR,sRoe1,sRoe2,sE1,sE2,uhat,chat
     double precision :: hstartest,hstarHLL,sLtest,sRtest
     double precision :: wall(2), fw(3,3), sw(3)
-    double precision :: g,drytol
+    double precision :: g,drytol,pL,pR
 
     g=grav
     drytol=dry_tolerance
@@ -161,14 +161,19 @@ subroutine rp1(maxmx,meqn,mwaves,maux,mbc,mx,ql,qr,auxl,auxr,fwave,s,amdq,apdq)
 
          maxiter = 1
 
+         ! In case there is no pressure forcing
+         pL = 0.d0
+         pR = 0.d0
+
          call riemann_aug_JCP(maxiter,3,3,hL,hR,huL, &
-     &  huR,hvL,hvR,bL,bR,uL,uR,vL,vR,phiL,phiR,sE1,sE2,drytol,g,sw,fw)
+              huR,hvL,hvR,bL,bR,uL,uR,vL,vR,phiL,phiR,pL,pR, &
+              sE1,sE2,drytol,g,rho,sw,fw)
 
 !         call riemann_ssqfwave(maxiter,meqn+1,mwaves+1,hL,hR,huL,huR, &
-!         &  hvL,hvR,bL,bR,uL,uR,vL,vR,phiL,phiR,sE1,sE2,drytol,g,sw,fw)
+!         &  hvL,hvR,bL,bR,uL,uR,vL,vR,phiL,phiR,sE1,sE2,drytol,g,rho,sw,fw)
 
 !         call riemann_fwave(meqn+1,mwaves+1,hL,hR,huL,huR,hvL,hvR, &
-!           &   bL,bR,uL,uR,vL,vR,phiL,phiR,sE1,sE2,drytol,g,sw,fw)
+!           &   bL,bR,uL,uR,vL,vR,phiL,phiR,sE1,sE2,drytol,g,rho,sw,fw)
 
          s(1,i) = sw(1)*wall(1)
          s(2,i) = sw(3)*wall(2)
