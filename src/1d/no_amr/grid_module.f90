@@ -1,5 +1,7 @@
 module grid_module
 
+    use geoclaw_module, only: bouss
+    
     implicit none
     save
 
@@ -60,7 +62,7 @@ subroutine read_grid(fname)
       cp(i) = 2.d0 / (dxm(i+1)*dxc(i))
       c0(i) = cm(i) + cp(i)
 
-      if (radial) then
+      if (radial .and. bouss) then
          ! include factors for ((1/r)*(r*q)_r)_r 
          ! using form q_{rr} + (1/r)q_r - (1/r**2)q
          r = xcell(i) - xgrid(1)  ! assuming radial about left edge!

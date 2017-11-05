@@ -10,6 +10,7 @@ subroutine src1(meqn,mbc,mx,xlower,dx,q,maux,aux,t,dt)
     use geoclaw_module, only: dry_tolerance, grav, DEG2RAD
     use geoclaw_module, only: ifrictiontype => friction_forcing
     use geoclaw_module, only: frictioncoeff => friction_coefficient
+    use geoclaw_module, only: radial, bouss
 
 
     implicit none
@@ -21,6 +22,8 @@ subroutine src1(meqn,mbc,mx,xlower,dx,q,maux,aux,t,dt)
     !Locals
     real(kind=8) :: gamma
     integer :: i
+
+    ! Friction:
 
     if (frictioncoeff.eq.0.d0 .or. ifrictiontype.eq.0) return
       ! integrate source term based on Manning formula
@@ -44,6 +47,33 @@ subroutine src1(meqn,mbc,mx,xlower,dx,q,maux,aux,t,dt)
         endif
       enddo
     endif
+
+!    ----------------------------------------------------------------
+    ! Radial source terms:
+
+    if (radial) then
+          ! radial source term:
+          do i=1,mx
+             ! assume radial about left edge!
+             rcell = 0.5*(xgrid(i) + xgrid(i+1)) - xgrid(1) 
+             q(1,i) = q(1,i) - dt/rcell * q(2,i)
+             if (q(1,i) .gt. dry_tolerance) then
+                 u = q(2,i)/q(1,i)
+               else
+                 u = 0.d0
+               endif
+             q(2,i) = q(2,i) - dt/rcell * q(1,i)*u**2
+             enddo
+         endif
+
+!    ----------------------------------------------------------------
+    ! Boussinesq terms:
+
+     if (bouss) then     
+       write(6,*) '*** To use Boussinesq solver, recompile with'
+       write(6,*) '*** src1_bouss.f90 rather than src1.f90, and with LAPACK'
+       endif
+
 
 end subroutine src1
 

@@ -29,8 +29,11 @@ module geoclaw_module
     integer :: coordinate_system
 
     real(kind=8), parameter :: rho = 1025.d0  ! density of sea water
+    logical :: radial, bouss
 
-
+    real(kind=8) :: B_param 
+    real(kind=8) :: sw_depth0, sw_depth1
+    
     ! Forcing
     ! friction
     real(kind=8) :: friction_depth, friction_coefficient, friction_forcing
@@ -77,6 +80,8 @@ contains
         read(unit,*) friction_coefficient
         read(unit,*) friction_depth
         read(unit,*) dry_tolerance
+        read(unit,*) radial
+        read(unit,*) bouss
 
         close(unit)
 
@@ -88,6 +93,8 @@ contains
         write(GEO_PARM_UNIT,*) '   friction_coefficient:', friction_coefficient
         write(GEO_PARM_UNIT,*) '   friction_depth:',friction_depth
         write(GEO_PARM_UNIT,*) '   dry_tolerance:',dry_tolerance
+        write(GEO_PARM_UNIT,*) '   radial:',radial
+        write(GEO_PARM_UNIT,*) '   bouss:',bouss
 
     end subroutine set_geo
 
