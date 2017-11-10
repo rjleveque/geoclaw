@@ -3,6 +3,32 @@ from __future__ import print_function
 import numpy as np
 
 def grid_eval(X, Y, Q, xout, yout, return_ma=True):
+    """
+    Input:
+        arrays X,Y defining a grid patch and data Q on this patch,
+        xout, yout defining the points for output (1d or 2d arrays)
+        return_ma (bool) determines if output is a masked array
+    Returns:
+        qout
+        
+    Currently this works only for 2d amrclaw/geoclaw output. 
+    (Eventually extend to 3d.)
+    
+    ndim(Q) is either 2 or 3.  If 3, then Q[m,i,j] is  m'th variable at i,j
+    if ndim(xout)==ndim(yout)==1 then an arbitrary set of points can be
+        specified (e.g. along a transect, or curve, or scattered).
+    if ndim(xout)==ndim(yout)==2 then Q is interpolated to this grid of points.
+    
+    if return_ma==True then the result is masked at points outside
+        the limits of X,Y.   Otherwise result is NaN at these points.
+    Uses zero-order interpolation, i.e.
+        Sets value qout[i,j] to value in the finite volume grid cell
+        of X,Y that contains (xout[i,j],yout[i,j]).
+    Future: allow bilinear interpolation instead but this requires
+        ghost cell values around Q grid.  (These are present in binary
+        output fort.b files but normally thrown away.)
+    """
+
     from scipy.interpolate import RegularGridInterpolator
     from numpy import ma  # for masked arrays
     
@@ -65,6 +91,26 @@ def grid_eval(X, Y, Q, xout, yout, return_ma=True):
     return qout
     
 def grid_output(framesoln, out_var, xout, yout, levels='all', return_ma=True):
+
+    """
+    Input:
+        framesoln:  One frame of Clawpack solution (perhaps with AMR),
+                 An object of type pyclaw.Solution.solution.
+        out_var: function that maps q to desired quantities Q[m,i,j] or
+                 Q[i,j] if only one.  
+                 If type(out_var) == int, then Q[i,j] = q[out_var,i,j]
+        xout, yout: arrays of outpuut points (1d or 2d arrays)
+        levels: list of levels to use, or 'all'
+        return_ma: True to return as masked_array, False to return with
+                NaN in locations that framesoln doesn't cover.
+    Output:
+        qout: Solution obtained on xout,yout grid
+
+    Loop over all patches in framesoln and apply grid_eval function.
+    Use non-NaN values that this returns to update qout array over the
+        region covered by this patch
+    """
+        
     from numpy import ma  # for masked arrays
     if levels == 'all':
         levels = range(1,100)  # more levels than will ever use
@@ -121,6 +167,7 @@ def load_frame(frameno, outdir='_output'):
     from clawpack.visclaw.data import ClawPlotData
     plotdata = ClawPlotData()
     plotdata.outdir = outdir
+    #plotdata.format = 'binary'
     framesoln = plotdata.getframe(frameno, plotdata.outdir)
     return framesoln
 
