@@ -292,17 +292,34 @@ class FGmaxGrid(object):
         if outdir is not None:
             self.outdir = outdir
     
-        fname = os.path.join(self.outdir, 'fort.FG%s.valuemax' \
+        # try new style, e.g. fort.FG0001.valuemax
+        fname1 = os.path.join(self.outdir, 'fort.FG%s.valuemax' \
                 % str(self.fgno).zfill(4))
-        if not os.path.isfile(fname):
-            raise IOError("File not found: %s" % fname)
+        if os.path.isfile(fname1):
+            fname_style = 'new'
+            fname = fname1
+        else:
+            # try old style, e.g. fort.FG1.valuemax
+            fname2 = os.path.join(self.outdir, 'fort.FG%s.valuemax' \
+                % str(self.fgno))
+            fname_style = 'old'
+            fname = fname2
+            if not os.path.isfile(fname2):
+                raise IOError("File not found: %s or %s" % (fname1,fname2))
+
         print("Reading %s ..." % fname)
         d = numpy.loadtxt(fname)
     
-        fname = os.path.join(self.outdir, 'fort.FG%s.aux1' \
-                % str(self.fgno).zfill(4))
+        if fname_style == 'new':
+            fname = os.path.join(self.outdir, 'fort.FG%s.aux1' \
+                    % str(self.fgno).zfill(4))
+        else:
+            fname = os.path.join(self.outdir, 'fort.FG%s.aux1' \
+                    % str(self.fgno))
+
         if not os.path.isfile(fname):
             raise IOError("File not found: %s" % fname)
+
         print("Reading %s ..." % fname)
         daux = numpy.loadtxt(fname)
     
