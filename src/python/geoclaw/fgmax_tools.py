@@ -138,7 +138,7 @@ class FGmaxGrid(object):
         
             fid.write("%i                 # npts\n" % (npts))
             for k in range(npts):
-                fid.write("%g   %g \n" % (self.X[k],self.Y[k]))
+                fid.write("%22.12f   %22.12f \n" % (self.X[k],self.Y[k]))
             fid.close()
             
             print("Created file ", self.input_file_name)
