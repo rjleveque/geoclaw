@@ -1329,6 +1329,7 @@ def kml_build_colorbar(cb_filename, cmap, cmin=None, cmax=None,
 
 
 def topo2kmz(topo, zlim=(-20,20), mask_outside_zlim=True, sea_level=0., 
+             clines_land=None, clines_water=None,
              force_dry=None, name='topo', close_figs=True):
 
     """
@@ -1352,10 +1353,17 @@ def topo2kmz(topo, zlim=(-20,20), mask_outside_zlim=True, sea_level=0.,
 
     """
 
+    import os
+    import numpy
+    import glob
     from numpy import ma
+    import zipfile
+    from matplotlib import pyplot as plt
     from clawpack.visclaw import colormaps
     from clawpack.geoclaw import kmltools
     
+    zmin,zmax = zlim # unpack
+
     cmap_land = colormaps.make_colormap({ 0.0:[0.1,0.4,0.0],
                                          0.25:[0.0,1.0,0.0],
                                           0.5:[0.8,1.0,0.5],
@@ -1374,7 +1382,7 @@ def topo2kmz(topo, zlim=(-20,20), mask_outside_zlim=True, sea_level=0.,
                                          data_break=sea_level)
     
     if mask_outside_zlim:
-        Z = ma.masked_where(logical_or(topo.Z<zmin, topo.Z>zmax), topo.Z)
+        Z = ma.masked_where(numpy.logical_or(topo.Z<zmin, topo.Z>zmax), topo.Z)
     else:
         Z = topo.Z
     
@@ -1387,24 +1395,41 @@ def topo2kmz(topo, zlim=(-20,20), mask_outside_zlim=True, sea_level=0.,
     fig,ax,png_extent,kml_dpi = kmltools.pcolorcells_for_kml(topo.X, topo.Y, 
                                                      Z_land,
                                                      png_filename=png_filename,
-                                                     dpc=2,cmap=cmap,norm=norm)
+                                                     dpc=2,
+                                                     cmap=cmap_topo,
+                                                     norm=norm_topo)
+    if clines_land is not None:
+        print('Adding contour lines')
+        ax.contour(topo.X, topo.Y, Z_land, clines_land, colors='g',
+                   linestyles='-',linewidths=0.9)
+        plt.savefig(png_filename, transparent=True, dpi=kml_dpi)
+
     if close_figs:
-        close(fig)
+        plt.close(fig)
 
     Z_water = ma.masked_where(Z>=sea_level, Z)
     png_filename = '%s/%s_water.png' % (kml_dir, name)
     fig,ax,png_extent,kml_dpi = kmltools.pcolorcells_for_kml(topo.X, topo.Y, 
                                                      Z_water,
                                                      png_filename=png_filename,
-                                                     dpc=2,cmap=cmap,norm=norm)
-    if close_figs:
-        close(fig)
+                                                     dpc=2,
+                                                     cmap=cmap_topo,
+                                                     norm=norm_topo)
+    if clines_water is not None:
+        ax.contour(topo.X, topo.Y, Z_water, clines_water, colors='b',
+                   linestyles='-',linewidths=0.9)
+        plt.savefig(png_filename, transparent=True, dpi=kml_dpi)
 
-    fig,ax,cb = kmltools.kml_build_colorbar('%s/colorbar.png' % kml_dir, cmap, 
-                                            cmin=zmin,cmax=zmax,label='meters', 
-                                            title='topo', extend='both')
     if close_figs:
-        close(fig)
+        plt.close(fig)
+
+    fig,ax,cb = kmltools.kml_build_colorbar('%s/colorbar.png' % kml_dir,
+                                            cmap_topo,
+                                            cmin=zmin,cmax=zmax,
+                                            label='meters', title='topo',
+                                            extend='both')
+    if close_figs:
+        plt.close(fig)
         
     png_files=['%s_water.png' % name, '%s_land.png' % name]
     png_names=['%s_water' % name,'%s_land' % name]
