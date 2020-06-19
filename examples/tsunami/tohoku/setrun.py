@@ -421,7 +421,7 @@ def setgeo(rundata):
     # == settopo.data values ==
     topofiles = rundata.topo_data.topofiles
     topofiles.append([3, 1, 1, 0.0, 1e10, os.path.join(topodir,'etopo1min130E210E0N60N.asc')])
-    # topofiles.append([3, 1, 1, 0.0, 1e10, os.path.join(topodir,'hawaii_6s.txt')])
+    topofiles.append([3, 1, 1, 0.0, 1e10, os.path.join(topodir,'hawaii_6s.txt')])
     topofiles.append([3, 1, 1, 0., 1.e10, os.path.join(topodir,'kahului_1s.txt')])
 
 
@@ -429,7 +429,7 @@ def setgeo(rundata):
     # [dtype, minlevel, maxlevel, 'topo']
 
     # Region 1, above handles this region.  
-    rundata.dtopo_data.dtopofiles = [[1, 1, 1, os.path.join(topodir,'Fujii.txydz')]]
+    rundata.dtopo_data.dtopofiles = [[1, 1, 1, os.path.join(topodir,'fujii.txydz')]]
 
     # == setqinit.data values ==
     rundata.qinit_data.qinit_type =  0
@@ -454,5 +454,8 @@ def setgeo(rundata):
 if __name__ == '__main__':
     # Set up run-time parameters and write all data files.
     import sys
+    from clawpack.geoclaw import kmltools
     rundata = setrun(*sys.argv[1:])
     rundata.write()
+
+    kmltools.make_input_data_kmls(rundata)
