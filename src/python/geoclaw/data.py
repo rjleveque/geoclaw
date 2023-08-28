@@ -734,3 +734,37 @@ class MultilayerData(clawpack.clawutil.data.ClawData):
                         description=('(Method for calculating inundation ',
                                      'eigenspace)'))
         self.close_data_file()
+
+
+class BoussData(clawpack.clawutil.data.ClawData):
+    r"""
+     data object for Boussinesq info in 2D geoclaw
+
+    """
+    def __init__(self):
+        super(BoussData,self).__init__()
+
+        self.add_attribute('useBouss',True)
+        self.add_attribute('minLevelBouss', 1)
+        self.add_attribute('maxLevelBouss', 10)
+        self.add_attribute('deepBouss', 10)
+        self.add_attribute('solver', 3)
+        self.add_attribute('equations',2)
+        self.add_attribute('Bparam', 1.153)
+        self.add_attribute('startWithBouss', True)
+        self.add_attribute('numSWEsteps', 0)
+
+    def write(self,out_file='bouss.data',data_source='setrun.py'):
+
+        self.open_data_file(out_file,data_source)
+        self.data_write('useBouss', description='Use Boussinesq terms?')
+        self.data_write('minLevelBouss', description='minlevel for Bouss terms')
+        self.data_write('maxLevelBouss', description='maxlevel for Bouss terms')
+        self.data_write('deepBouss', description='min water depth for Bouss terms')
+        self.data_write('solver', description='1=GMRES, 2=Pardiso, 3=PETSc')
+        self.data_write('equations', description='1=MadsenSorensen, 2=SGN')
+        self.data_write('Bparam',  description='alpha for SGN or B for MS')
+        self.data_write('startWithBouss', description='Take numSWEsteps of SWE first')
+        self.data_write('numSWEsteps', description='Take this many SWE steps first')
+
+        self.close_data_file()
