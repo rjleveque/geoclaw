@@ -751,8 +751,7 @@ class BoussData(clawpack.clawutil.data.ClawData):
         self.add_attribute('solver', 3)
         self.add_attribute('equations',2)
         self.add_attribute('Bparam', 1.153)
-        self.add_attribute('startWithBouss', True)
-        self.add_attribute('numSWEsteps', 0)
+        self.add_attribute('startBoussTime', 0)
 
     def write(self,out_file='bouss.data',data_source='setrun.py'):
 
@@ -761,10 +760,8 @@ class BoussData(clawpack.clawutil.data.ClawData):
         self.data_write('minLevelBouss', description='minlevel for Bouss terms')
         self.data_write('maxLevelBouss', description='maxlevel for Bouss terms')
         self.data_write('deepBouss', description='min water depth for Bouss terms')
-        self.data_write('solver', description='1=GMRES, 2=Pardiso, 3=PETSc')
+        self.data_write('solver', description='2=Pardiso, 3=PETSc')
         self.data_write('equations', description='1=MadsenSorensen, 2=SGN')
-        self.data_write('Bparam',  description='alpha for SGN or B for MS')
-        self.data_write('startWithBouss', description='Take numSWEsteps of SWE first')
-        self.data_write('numSWEsteps', description='Take this many SWE steps first')
+        self.data_write('startBoussTime', description='When to switch to Bouss')
 
         self.close_data_file()
