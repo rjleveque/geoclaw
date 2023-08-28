@@ -744,7 +744,7 @@ class BoussData(clawpack.clawutil.data.ClawData):
     def __init__(self):
         super(BoussData,self).__init__()
 
-        self.add_attribute('useBouss',True)
+        self.add_attribute('useBouss',False)  # default to SWE
         self.add_attribute('minLevelBouss', 1)
         self.add_attribute('maxLevelBouss', 10)
         self.add_attribute('deepBouss', 10)
