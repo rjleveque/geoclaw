@@ -7,13 +7,8 @@ function setplot is called to set the plot parameters.
     
 """ 
 
-from __future__ import absolute_import
-from __future__ import print_function
 import numpy as np
 import matplotlib.pyplot as plt
-
-from clawpack.geoclaw import topotools
-from six.moves import range
 
 try:
     TG32412 = np.loadtxt('32412_notide.txt')
@@ -57,20 +52,32 @@ def setplot(plotdata=None):
     # Figure for surface
     #-----------------------------------------
     plotfigure = plotdata.new_plotfigure(name='Surface', figno=0)
+    # new options:
+    plotfigure.figsize = (8,6)
+    plotfigure.facecolor = 'w'
 
     # Set up for axes in this figure:
     plotaxes = plotfigure.new_plotaxes('pcolor')
-    plotaxes.title = 'Surface'
+
+    #plotaxes.title = 'Surface'
+    #plotaxes.title_t_format = '%.2f seconds'  # new option
+    
+    # new option: including h:m:s in title converts to hours:minutes:seconds   
+    plotaxes.title = 'Surface at time h:m:s after quake'
+
+    # new options:
+    plotaxes.title_kwargs = {'fontsize':15}
     plotaxes.scaled = True
+    plotaxes.xticks_kwargs = {'fontsize':12}
+    plotaxes.yticks_kwargs = {'fontsize':12}
+    plotaxes.x_label = 'Longitude'
+    plotaxes.x_label_kwargs = {'fontsize':12}
+    plotaxes.y_label = 'Latitude'
+    plotaxes.y_label_kwargs = {'fontsize':12}
 
     def fixup(current_data):
-        import pylab
         addgauges(current_data)
-        t = current_data.t
-        t = t / 3600.  # hours
-        pylab.title('Surface at %4.2f hours' % t, fontsize=20)
-        pylab.xticks(fontsize=15)
-        pylab.yticks(fontsize=15)
+
     plotaxes.afteraxes = fixup
 
     # Water
@@ -81,6 +88,7 @@ def setplot(plotdata=None):
     plotitem.pcolor_cmin = -0.2
     plotitem.pcolor_cmax = 0.2
     plotitem.add_colorbar = True
+    plotitem.colorbar_extend = 'both'
     plotitem.amr_celledges_show = [0,0,0]
     plotitem.patchedges_show = 1
 
@@ -120,6 +128,14 @@ def setplot(plotdata=None):
     plotaxes.xlimits = 'auto'
     plotaxes.ylimits = 'auto'
     plotaxes.title = 'Surface'
+    plotaxes.title_kwargs = {'fontsize':15}
+    plotaxes.time_scale = 1/3600.  # convert seconds to hours
+    plotaxes.time_label = 'time (hours) post-quake'
+    plotaxes.time_label_kwargs = {'fontsize':12}
+    plotaxes.y_label = 'meters'
+    plotaxes.y_label_kwargs = {'fontsize':12}
+    plotaxes.grid = True
+    plotaxes.grid_kwargs = {'linewidth':0.7}
 
     # Plot surface as blue curve:
     plotitem = plotaxes.new_plotitem(plot_type='1d_plot')
@@ -133,31 +149,27 @@ def setplot(plotdata=None):
     def gaugetopo(current_data):
         q = current_data.q
         h = q[0,:]
-        eta = q[3,:]
+        eta = q[-1,:]
         topo = eta - h
         return topo
         
     plotitem.plot_var = gaugetopo
     plotitem.plotstyle = 'g-'
 
-    def add_zeroline(current_data):
-        from pylab import plot, legend, xticks, floor, axis, xlabel
+    def add_obs(current_data):
+        from pylab import plot, legend, axis
         t = current_data.t 
         gaugeno = current_data.gaugeno
 
         if gaugeno == 32412:
+            # plot observation (with t in hours):
             try:
-                plot(TG32412[:,0], TG32412[:,1], 'r')
+                plot(TG32412[:,0]/3600., TG32412[:,1], 'r')
                 legend(['GeoClaw','Obs'],loc='lower right')
             except: pass
-            axis((0,t.max(),-0.3,0.3))
+            axis((0,t.max()/3600.,-0.3,0.3))
 
-        plot(t, 0*t, 'k')
-        n = int(floor(t.max()/3600.) + 2)
-        xticks([3600*i for i in range(n)], ['%i' % i for i in range(n)])
-        xlabel('time (hours)')
-
-    plotaxes.afteraxes = add_zeroline
+    plotaxes.afteraxes = add_obs
 
 
     #-----------------------------------------
