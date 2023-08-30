@@ -66,19 +66,17 @@ def setplot(plotdata=None):
     plotaxes.title = 'Surface at time h:m:s after quake'
 
     # new options:
-    plotaxes.title_kwargs = {'fontsize':15}
+    plotaxes.title_fontsize = 15
     plotaxes.scaled = True
-    plotaxes.xticks_kwargs = {'fontsize':12}
-    plotaxes.yticks_kwargs = {'fontsize':12}
+    plotaxes.xticks_kwargs = {'ticks':range(-120,-59,5),
+                              'rotation':20, 'fontsize':10}
+    plotaxes.yticks_fontsize = 12
     plotaxes.x_label = 'Longitude'
-    plotaxes.x_label_kwargs = {'fontsize':12}
+    plotaxes.x_label_fontsize = 12
     plotaxes.y_label = 'Latitude'
-    plotaxes.y_label_kwargs = {'fontsize':12}
+    plotaxes.y_label_fontsize = 12
 
-    def fixup(current_data):
-        addgauges(current_data)
-
-    plotaxes.afteraxes = fixup
+    plotaxes.afteraxes = addgauges
 
     # Water
     plotitem = plotaxes.new_plotitem(plot_type='2d_pcolor')
