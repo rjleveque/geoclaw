@@ -71,10 +71,10 @@ def setplot(plotdata=None):
     plotaxes.xticks_kwargs = {'ticks':range(-120,-59,5),
                               'rotation':20, 'fontsize':10}
     plotaxes.yticks_fontsize = 12
-    plotaxes.x_label = 'Longitude'
-    plotaxes.x_label_fontsize = 12
-    plotaxes.y_label = 'Latitude'
-    plotaxes.y_label_fontsize = 12
+    plotaxes.xlabel = 'Longitude'
+    plotaxes.xlabel_fontsize = 12
+    plotaxes.ylabel = 'Latitude'
+    plotaxes.ylabel_fontsize = 12
 
     plotaxes.afteraxes = addgauges
 
@@ -131,8 +131,8 @@ def setplot(plotdata=None):
     plotaxes.time_scale = 1/3600.  # convert seconds to hours
     plotaxes.time_label = 'time (hours) post-quake'
     plotaxes.time_label_kwargs = {'fontsize':12}
-    plotaxes.y_label = 'meters'
-    plotaxes.y_label_kwargs = {'fontsize':12}
+    plotaxes.ylabel = 'meters'
+    plotaxes.ylabel_kwargs = {'fontsize':12}
     plotaxes.grid = True
     plotaxes.grid_kwargs = {'linewidth':0.7}
 
