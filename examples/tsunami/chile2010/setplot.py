@@ -89,6 +89,7 @@ def setplot(plotdata=None):
     plotitem.pcolor_cmax = 0.2
     plotitem.add_colorbar = True
     plotitem.colorbar_extend = 'both'
+    plotitem.colorbar_label = 'meters'
     plotitem.amr_celledges_show = [0,0,0]
     plotitem.patchedges_show = 1
 
