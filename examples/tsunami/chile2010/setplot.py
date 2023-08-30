@@ -132,7 +132,7 @@ def setplot(plotdata=None):
     plotaxes.time_label = 'time (hours) post-quake'
     plotaxes.time_label_kwargs = {'fontsize':12}
     plotaxes.ylabel = 'meters'
-    plotaxes.ylabel_kwargs = {'fontsize':12}
+    plotaxes.ylabel_fontsize = 12
     plotaxes.grid = True
     plotaxes.grid_kwargs = {'linewidth':0.7}
 
