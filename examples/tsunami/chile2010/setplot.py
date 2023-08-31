@@ -58,6 +58,8 @@ def setplot(plotdata=None):
 
     # Set up for axes in this figure:
     plotaxes = plotfigure.new_plotaxes('pcolor')
+    plotaxes.title = 'Surface'
+    plotaxes.aspect_latitude = -20.
 
     #plotaxes.title = 'Surface'
     #plotaxes.title_t_format = '%.2f seconds'  # new option
