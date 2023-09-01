@@ -58,8 +58,6 @@ def setplot(plotdata=None):
 
     # Set up for axes in this figure:
     plotaxes = plotfigure.new_plotaxes('pcolor')
-    plotaxes.title = 'Surface'
-    plotaxes.aspect_latitude = -20.
 
     #plotaxes.title = 'Surface'
     #plotaxes.title_t_format = '%.2f seconds'  # new option
@@ -68,8 +66,8 @@ def setplot(plotdata=None):
     plotaxes.title = 'Surface at time h:m:s after quake'
 
     # new options:
+    plotaxes.aspect_latitude = -20.  # set aspect ratio based on this latitude
     plotaxes.title_fontsize = 15
-    plotaxes.scaled = True
     plotaxes.xticks_kwargs = {'ticks':range(-120,-59,5),
                               'rotation':20, 'fontsize':10}
     plotaxes.yticks_fontsize = 12
@@ -129,10 +127,10 @@ def setplot(plotdata=None):
     plotaxes.xlimits = 'auto'
     plotaxes.ylimits = 'auto'
     plotaxes.title = 'Surface'
-    plotaxes.title_kwargs = {'fontsize':15}
+    plotaxes.title_fontsize = 15
     plotaxes.time_scale = 1/3600.  # convert seconds to hours
     plotaxes.time_label = 'time (hours) post-quake'
-    plotaxes.time_label_kwargs = {'fontsize':12}
+    plotaxes.time_label_fontsize = 12
     plotaxes.ylabel = 'meters'
     plotaxes.ylabel_fontsize = 12
     plotaxes.grid = True
@@ -163,7 +161,7 @@ def setplot(plotdata=None):
         gaugeno = current_data.gaugeno
 
         if gaugeno == 32412:
-            # plot observation (with t in hours):
+            # plot observation (rescale so t is in hours):
             try:
                 plot(TG32412[:,0]/3600., TG32412[:,1], 'r')
                 legend(['GeoClaw','Obs'],loc='lower right')
