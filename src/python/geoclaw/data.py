@@ -744,24 +744,21 @@ class BoussData(clawpack.clawutil.data.ClawData):
     def __init__(self):
         super(BoussData,self).__init__()
 
-        self.add_attribute('useBouss',False)  # default to SWE
+        self.add_attribute('boussEquations',0) # default to SWE
         self.add_attribute('minLevelBouss', 1)
-        self.add_attribute('maxLevelBouss', 10)
-        self.add_attribute('deepBouss', 10)
+        self.add_attribute('maxLevelBouss', 20)
+        self.add_attribute('boussMinDepth', 10.)
         self.add_attribute('solver', 3)
-        self.add_attribute('equations',2)
-        self.add_attribute('Bparam', 1.153)
         self.add_attribute('startBoussTime', 0)
 
     def write(self,out_file='bouss.data',data_source='setrun.py'):
 
         self.open_data_file(out_file,data_source)
-        self.data_write('useBouss', description='Use Boussinesq terms?')
+        self.data_write('boussEquations', description='0=SWE, 1=MadsenSorensen, 2=SGN')
         self.data_write('minLevelBouss', description='minlevel for Bouss terms')
         self.data_write('maxLevelBouss', description='maxlevel for Bouss terms')
-        self.data_write('deepBouss', description='min water depth for Bouss terms')
+        self.data_write('boussMinDepth', description='min water depth for Bouss terms')
         self.data_write('solver', description='2=Pardiso, 3=PETSc')
-        self.data_write('equations', description='1=MadsenSorensen, 2=SGN')
         self.data_write('startBoussTime', description='When to switch to Bouss')
 
         self.close_data_file()
