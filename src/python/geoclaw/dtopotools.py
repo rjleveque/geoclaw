@@ -768,6 +768,10 @@ class Fault(object):
 
         Raises a ValueError exception if the *rupture_type* is an unknown type.
 
+        If verbose == True then the subfault number is printed as each is
+        processed to show progress.  If verbose is an integer, then it is
+        printed for the k'th subfault only if mod(k,verbose) == 0.
+        
         returns a :class`DTopography` object.
         """
 
@@ -783,21 +787,35 @@ class Fault(object):
             print("Making Okada dz for each of %s subfaults" \
                   % len(self.subfaults))
 
+        # If possible, don't set subfault.dtopo, to avoid using more memory
+        # than necessary, but this only works for a static rupture:
+        set_dtopo = self.rupture_type in ['dynamic','kinematic']
+        # (Should modify so it works also for kinematic case)
+        
+        dz = numpy.zeros(X.shape)  # to accumulate dZ for static rupture
+        
         for k,subfault in enumerate(self.subfaults):
             if verbose:
-                sys.stdout.write("%s.." % k)
-                sys.stdout.flush()
-            subfault.okada(x,y)  # sets subfault.dtopo with times=[0]
-                                 # and subfault.dtopo.dZ.shape[0] == 1
+                if (type(verbose) is int) and (numpy.mod(k,verbose) != 0):
+                    pass
+                else:
+                    sys.stdout.write("%s.." % k)
+                    sys.stdout.flush()
+                    
+            dtopo = subfault.okada(x,y,set_dtopo=set_dtopo)  
+            # returns dtopo with times=[0] and dtopo.dZ.shape[0] == 1
+            # Also sets subfault.dtopo to this object if set_dtopo is True
+            
+            if not set_dtopo:
+                dz += dtopo.dZ[0,:,:]
+                    
+            
         if verbose:
             sys.stdout.write("\nDone\n")
 
         if self.rupture_type == 'static':
             if len(times) > 2:
                 raise ValueError("For static deformation, need len(times) <= 2")
-            dz = numpy.zeros(X.shape)
-            for subfault in self.subfaults:
-                dz += subfault.dtopo.dZ[0,:,:]
 
             if len(times) == 1:
                 # only final deformation stored:
@@ -1682,12 +1700,17 @@ class SubFault(object):
         return x,y
 
     
-    def okada(self, x, y):
+    def okada(self, x, y, set_dtopo=True):
         r"""
         Apply Okada to this subfault and return a DTopography object.
 
         :Input:
           - x,y are 1d arrays
+          - set_dtopo (bool): If True, also set self.dtopo = dtopo, the
+            DTopography object created.
+            Note: this may use too much memory if there are many subfaults with
+            fine grid dtopo files. But currently required when making
+            kinematic rupture from many time-dependent subfaults.
         :Output:
           - DTopography object with dZ array of shape (1,len(x),len(y))
                 with single static displacement and times = [0.].
@@ -1774,7 +1797,8 @@ class SubFault(object):
             dtopo.Y = Y
             dtopo.dZ = numpy.array(dz, ndmin=3)
             dtopo.times = [0.]
-            self.dtopo = dtopo
+            if set_dtopo:
+                self.dtopo = dtopo
 
         elif self.coordinate_specification == 'triangular':
 
@@ -1866,7 +1890,8 @@ class SubFault(object):
             dtopo.dY = numpy.array(dY, ndmin=3)
             dtopo.dZ = numpy.array(dZ, ndmin=3)
             dtopo.times = [0.]
-            self.dtopo = dtopo
+            if set_dtopo:
+                self.dtopo = dtopo
 
         return dtopo
 
