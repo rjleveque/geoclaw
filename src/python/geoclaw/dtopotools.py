@@ -810,12 +810,12 @@ class Fault(object):
             if abs(subfault.slip) < slip_tol:
                 nignore += 1
             else:
-                dtopo = subfault.okada(x,y,set_dtopo=set_dtopo)  
+                dtopo_sub = subfault.okada(x,y,set_dtopo=set_dtopo)  
                 # returns dtopo with times=[0] and dtopo.dZ.shape[0] == 1
                 # Also sets subfault.dtopo to this object if set_dtopo is True
-                
+
                 if not set_dtopo:
-                    dz += dtopo.dZ[0,:,:]
+                    dz += dtopo_sub.dZ[0,:,:]
                     
             
         if verbose:
@@ -850,9 +850,10 @@ class Fault(object):
                                            subfault.rise_shape)
 
                         dfrac = rf[1] - rf[0]
+
                         if dfrac > 0.:
                             dzt = dzt + dfrac * subfault.dtopo.dZ[0,:,:]
-                        
+
                 dzt = numpy.array(dzt, ndmin=3)  # convert to 3d array
                 if dZ is None:
                     dZ = dzt.copy()
