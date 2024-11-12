@@ -760,7 +760,8 @@ class Fault(object):
         r"""Calculate the moment magnitude for a fault composed of subfaults."""
         return Mw(self.Mo())
 
-    def create_dtopography(self, x, y, times=[0., 1.], verbose=False):
+    def create_dtopography(self, x, y, times=[0., 1.], slip_tol=0.001,
+                           verbose=False):
         r"""Compute change in topography and construct a dtopography object.
 
         Use subfaults' `okada` routine and add all 
@@ -768,12 +769,16 @@ class Fault(object):
 
         Raises a ValueError exception if the *rupture_type* is an unknown type.
 
+        Subfaults are ignored if abs(subfault.slip) < slip_tol
+
         If verbose == True then the subfault number is printed as each is
         processed to show progress.  If verbose is an integer, then it is
         printed for the k'th subfault only if mod(k,verbose) == 0.
         
         returns a :class`DTopography` object.
         """
+
+        nignore = 0  # to keep track of how many have abs(slip) < slip_tol
 
         dtopo = DTopography()
         dtopo.x = x
@@ -801,13 +806,16 @@ class Fault(object):
                 else:
                     sys.stdout.write("%s.." % k)
                     sys.stdout.flush()
-                    
-            dtopo = subfault.okada(x,y,set_dtopo=set_dtopo)  
-            # returns dtopo with times=[0] and dtopo.dZ.shape[0] == 1
-            # Also sets subfault.dtopo to this object if set_dtopo is True
-            
-            if not set_dtopo:
-                dz += dtopo.dZ[0,:,:]
+
+            if abs(subfault.slip) < slip_tol:
+                nignore += 1
+            else:
+                dtopo = subfault.okada(x,y,set_dtopo=set_dtopo)  
+                # returns dtopo with times=[0] and dtopo.dZ.shape[0] == 1
+                # Also sets subfault.dtopo to this object if set_dtopo is True
+                
+                if not set_dtopo:
+                    dz += dtopo.dZ[0,:,:]
                     
             
         if verbose:
@@ -834,16 +842,16 @@ class Fault(object):
             dZ = None
             for t in times:
                 for k,subfault in enumerate(self.subfaults):
+                    if abs(subfault.slip) >= slip_tol:
+                        rf = rise_fraction([t_prev,t],
+                                           subfault.rupture_time,
+                                           subfault.rise_time,
+                                           subfault.rise_time_starting,
+                                           subfault.rise_shape)
 
-                    rf = rise_fraction([t_prev,t],
-                                       subfault.rupture_time,
-                                       subfault.rise_time,
-                                       subfault.rise_time_starting,
-                                       subfault.rise_shape)
-
-                    dfrac = rf[1] - rf[0]
-                    if dfrac > 0.:
-                        dzt = dzt + dfrac * subfault.dtopo.dZ[0,:,:]
+                        dfrac = rf[1] - rf[0]
+                        if dfrac > 0.:
+                            dzt = dzt + dfrac * subfault.dtopo.dZ[0,:,:]
                         
                 dzt = numpy.array(dzt, ndmin=3)  # convert to 3d array
                 if dZ is None:
@@ -855,6 +863,10 @@ class Fault(object):
 
         else:   
             raise ValueError("Unrecognized rupture_type: %s" % self.rupture_type)
+
+        if verbose and nignore > 0:
+            print('Ignored %i subfaults with abs(slip) < slip_tol = %.3fm' \
+                  % (nignore,slip_tol))
 
         # Store for user
         self.dtopo = dtopo
