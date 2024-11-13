@@ -760,6 +760,7 @@ class Fault(object):
         r"""Calculate the moment magnitude for a fault composed of subfaults."""
         return Mw(self.Mo())
 
+
     def create_dtopography(self, x, y, times=[0., 1.], slip_tol=0.001,
                            verbose=False):
         r"""Compute change in topography and construct a dtopography object.
@@ -787,20 +788,54 @@ class Fault(object):
         dtopo.X = X
         dtopo.Y = Y
         dtopo.times = times
+        # array to accumulate dZ at each time in times:
+        dZ = numpy.zeros((len(times), X.shape[0], X.shape[1]))
 
         if verbose:
             print("Making Okada dz for each of %s subfaults" \
                   % len(self.subfaults))
 
-        # If possible, don't set subfault.dtopo, to avoid using more memory
-        # than necessary, but this only works for a static rupture:
-        set_dtopo = self.rupture_type in ['dynamic','kinematic']
-        # (Should modify so it works also for kinematic case)
+        # Don't set subfault.dtopo for each subfault, to avoid using more memory
+        # than necessary:
+        set_dtopo = False
         
         dz = numpy.zeros(X.shape)  # to accumulate dZ for static rupture
+
+        if self.rupture_type == 'static':
+            if len(times) > 2:
+                raise ValueError("For static deformation, need len(times) <= 2")
+            elif len(times) == 2:
+                # want dz = 0 at first time and final deformation at second:
+                assert times[0] < times[1], \
+                        '*** For static rupture with two times' + \
+                        ' need times[0] < times[1],   times = %s' % times
+
+        # Set rise fractions for each subfault
+        # subfault.rf will be an array of length len(times)
+        for k,subfault in enumerate(self.subfaults):
+            if self.rupture_type in ['dynamic','kinematic']:
+                if abs(subfault.slip) >= slip_tol:
+                    subfault.rf = rise_fraction(times,
+                                       subfault.rupture_time,
+                                       subfault.rise_time,
+                                       subfault.rise_time_starting,
+                                       subfault.rise_shape)
+                else:
+                    subfault.rf = numpy.zeros(times.shape)
+            elif self.rupture_type == 'static':
+                # static rupture with 1 or 2 times:
+                if len(times) == 1:
+                    subfault.rf = numpy.array([1.])
+                else:
+                    subfault.rf = numpy.array([0.,1.])
+            else:
+                raise ValueError('*** Unrecognized rupture_type = %s' \
+                        % self.rupture_type)
+                
         
         for k,subfault in enumerate(self.subfaults):
             if verbose:
+                # report progress without line feeds:
                 if (type(verbose) is int) and (numpy.mod(k,verbose) != 0):
                     pass
                 else:
@@ -810,66 +845,28 @@ class Fault(object):
             if abs(subfault.slip) < slip_tol:
                 nignore += 1
             else:
-                dtopo_sub = subfault.okada(x,y,set_dtopo=set_dtopo)  
+                # MAIN WORK HERE -- apply Okada model to obtain dz for this
+                # subfault at all points in the surface deformation grid (x,y)
+                dtopo_sub = subfault.okada(x,y,set_dtopo=False)  
                 # returns dtopo with times=[0] and dtopo.dZ.shape[0] == 1
-                # Also sets subfault.dtopo to this object if set_dtopo is True
+                # Does not set subfault.dtopo, no longer need to store for later
 
-                if not set_dtopo:
-                    dz += dtopo_sub.dZ[0,:,:]
-                    
-            
+                # Use the rise fraction rf of this subfault at each time to
+                # update the full dZ array that is sum over all subfaults:
+                for kt in range(len(times)):
+                    if subfault.rf[kt] > 0:
+                        dZ[kt,:,:] += subfault.rf[kt] * dtopo_sub.dZ[0,:,:]
+
         if verbose:
             sys.stdout.write("\nDone\n")
-
-        if self.rupture_type == 'static':
-            if len(times) > 2:
-                raise ValueError("For static deformation, need len(times) <= 2")
-
-            if len(times) == 1:
-                # only final deformation stored:
-                dtopo.dZ = numpy.array(dz, ndmin=3) 
-            elif len(times) == 2:
-                # store 0 at first time and final deformation at second:
-                dz0 = numpy.zeros(X.shape)
-                dtopo.dZ = numpy.array([dz0, dz])
-                if dtopo.dZ.shape != (2, dz.shape[0], dz.shape[1]):
-                    raise ValueError("dtopo.dZ does not have expected shape")
-
-        elif self.rupture_type in ['dynamic','kinematic']:
-
-            t_prev = -1.e99
-            dzt = numpy.zeros(X.shape)
-            dZ = None
-            for t in times:
-                for k,subfault in enumerate(self.subfaults):
-                    if abs(subfault.slip) >= slip_tol:
-                        rf = rise_fraction([t_prev,t],
-                                           subfault.rupture_time,
-                                           subfault.rise_time,
-                                           subfault.rise_time_starting,
-                                           subfault.rise_shape)
-
-                        dfrac = rf[1] - rf[0]
-
-                        if dfrac > 0.:
-                            dzt = dzt + dfrac * subfault.dtopo.dZ[0,:,:]
-
-                dzt = numpy.array(dzt, ndmin=3)  # convert to 3d array
-                if dZ is None:
-                    dZ = dzt.copy()
-                else:
-                    dZ = numpy.append(dZ, dzt, axis=0)
-                t_prev = t
-            dtopo.dZ = dZ
-
-        else:   
-            raise ValueError("Unrecognized rupture_type: %s" % self.rupture_type)
-
+            
         if verbose and nignore > 0:
             print('Ignored %i subfaults with abs(slip) < slip_tol = %.3fm' \
                   % (nignore,slip_tol))
 
-        # Store for user
+        dtopo.dZ = dZ
+
+        # Also store dtopo as an attribute of this Fault object:
         self.dtopo = dtopo
 
         return dtopo
@@ -1713,17 +1710,19 @@ class SubFault(object):
         return x,y
 
     
-    def okada(self, x, y, set_dtopo=True):
+    def okada(self, x, y, set_dtopo=False):
         r"""
         Apply Okada to this subfault and return a DTopography object.
 
         :Input:
           - x,y are 1d arrays
           - set_dtopo (bool): If True, also set self.dtopo = dtopo, the
-            DTopography object created.
-            Note: this may use too much memory if there are many subfaults with
-            fine grid dtopo files. But currently required when making
-            kinematic rupture from many time-dependent subfaults.
+            DTopography object created.  Usually not needed, and no longer
+            required when making static or kinematic rupture using
+            Fault.create_dtopopgraphy. (Previous versions used
+            too much memory if there were many subfaults and a
+            fine grid dZ was requested.)
+
         :Output:
           - DTopography object with dZ array of shape (1,len(x),len(y))
                 with single static displacement and times = [0.].
