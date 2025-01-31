@@ -13,7 +13,7 @@
 -mpi_linear_solver_server_minimum_count_per_rank 5000
 -mpi_linear_solver_server
 -mpi_linear_solver_server_view
--mpi_linear_solver_server_use_shared_memory false
+-mpi_linear_solver_server_use_shared_memory true
 
 # Krylov linear solver:
 -ksp_type gmres

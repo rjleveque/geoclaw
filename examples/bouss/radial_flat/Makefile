@@ -55,7 +55,7 @@ endif
 FC = ${CLAW_MPIFC}
 
 # How many MPI processes to use:
-BOUSS_MPI_PROCS ?= 6
+BOUSS_MPI_PROCS = 6
 
 EXE = $(PWD)/xgeoclaw
 #RUNEXE="${PETSC_DIR}/${PETSC_ARCH}/bin/mpiexec -n ${BOUSS_MPI_PROCS}"
