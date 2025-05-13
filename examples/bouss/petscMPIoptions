@@ -10,7 +10,7 @@
 #    https://petsc.org/release/manualpages/PC/PCSetFromOptions/
 
 # set min numbers of matrix rows per MPI rank  (default is 10000)
--mpi_linear_solver_server_minimum_count_per_rank 5000
+-mpi_linear_solver_server_minimum_count_per_rank 10000
 -mpi_linear_solver_server
 -mpi_linear_solver_server_view
 -mpi_linear_solver_server_use_shared_memory true
@@ -29,7 +29,7 @@
 
 # debug options:
 #-fp_trap off
-#-log_view
+-log_view
 #-start_in_debugger -debugger_rank 0
 #-ksp_monitor
 #-ksp_view
