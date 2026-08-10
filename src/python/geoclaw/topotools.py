@@ -2001,9 +2001,12 @@ class Topography(object):
               coordinates. Default ``None`` crops to the current ``extent`` (so
               only *coarsen* has effect). The older ``filter_region`` keyword is
               a deprecated alias.
-            - *coarsen* (int): coarsening factor (by subsampling)
-            - *buffer* (int): when possible, have at least this many points
-                                outside the crop_extent on each side
+            - *coarsen* (int): coarsening factor (by subsampling). Truncated to
+              an integer via ``int()``.
+            - *buffer* (int): integer number of grid points to keep on each side
+              of *crop_extent* (when possible) -- NOT a coordinate distance (cf.
+              ``interp_unstructured``'s ``buffer_length``, which is in meters).
+              Truncated to an integer via ``int()``.
             - *align* (tuple): (xalign,yalign) = desired alignment if coarsening
 
         Setting *buffer > 0* may be useful to insure that the
@@ -2047,6 +2050,12 @@ class Topography(object):
 
         crop_extent = _resolve_crop_extent(crop_extent,
                                            {'filter_region': filter_region})
+
+        # buffer and coarsen are integer grid-point counts (they feed the index
+        # arithmetic below); truncate any float via int() as documented, rather
+        # than failing later with an opaque "slice indices must be integers".
+        buffer = int(buffer)
+        coarsen = int(coarsen)
 
         if self.unstructured:
             raise NotImplementedError("*** Cannot currently crop unstructured topo")

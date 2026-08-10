@@ -648,7 +648,7 @@ class DTopoData(clawpack.clawutil.data.ClawData):
             unsupported = [name for name, is_set in (
                 ("crop_extent", d.crop_extent is not None),
                 ("coarsen", d.coarsen != 1),
-                ("buffer", d.buffer != 0.0),
+                ("buffer", d.buffer != 0),
                 ("align", d.align is not None),
             ) if is_set]
             if unsupported:
@@ -740,7 +740,7 @@ class DTopoData(clawpack.clawutil.data.ClawData):
                 crop = [float(v) for v in _data(lines[i + 2]).split()]
                 d.crop_extent = None if all(v == 0. for v in crop) else crop
                 d.coarsen = int(_data(lines[i + 3]))
-                d.buffer = float(_data(lines[i + 4]))
+                d.buffer = int(_data(lines[i + 4]))  # grid-point count
                 align = [float(v) for v in _data(lines[i + 5]).split()]
                 d.align = None if all(v == 0. for v in align) else align
                 d.x_shift = float(_data(lines[i + 6]))

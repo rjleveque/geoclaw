@@ -807,6 +807,30 @@ def test_crop_crop_extent_and_filter_region_alias():
 
 
 @pytest.mark.python
+def test_crop_buffer_is_integer_point_count():
+    """buffer is an integer grid-point count: a float is truncated via int()
+    (not a coordinate distance), and buffer>0 keeps extra points each side."""
+    def topo_bowl(x, y):
+        return 1000.0 * (x**2 + y**2 - 1.0)
+    topo = topotools.Topography(topo_func=topo_bowl)
+    topo.x = np.linspace(-2.0, 2.0, 9)   # dx = 0.5
+    topo.y = np.linspace(-2.0, 2.0, 9)
+    _ = topo.Z
+
+    region = [-0.6, 0.6, -0.6, 0.6]
+    base = topo.crop(crop_extent=region, buffer=0)
+    buffered = topo.crop(crop_extent=region, buffer=1)
+    # A one-point buffer adds a grid point on each side (not a distance).
+    assert buffered.x.size == base.x.size + 2
+    assert buffered.y.size == base.y.size + 2
+
+    # A float buffer truncates via int() instead of raising a slice error.
+    truncated = topo.crop(crop_extent=region, buffer=1.5)
+    assert truncated.x.size == buffered.x.size
+    assert np.allclose(truncated.Z, buffered.Z)
+
+
+@pytest.mark.python
 def test_read_crop_extent_and_filter_region_alias():
     """read(crop_extent=r) equals setting the attribute then reading; the
     deprecated filter_region= alias warns and gives the same result."""
