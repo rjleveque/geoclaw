@@ -324,7 +324,7 @@ def _read_etopo1_topography(coarsen=10):
     try:
         return topotools.fetch_remote_topo(
             "etopo1",
-            filter_region=etopo1_extent,
+            crop_extent=etopo1_extent,
             coarsen=coarsen,
             verbose=True,
         )
@@ -405,28 +405,28 @@ def test_read_netcdf_deprecated_shim(monkeypatch):
     """read_netcdf warns and maps its legacy args onto fetch_remote_topo."""
     calls = {}
 
-    def fake_fetch(name_or_url, filter_region=None, coarsen=1, buffer=0,
+    def fake_fetch(name_or_url, crop_extent=None, coarsen=1, buffer=0,
                    align=None, nc_params={}, verbose=False):
         calls["name_or_url"] = name_or_url
-        calls["filter_region"] = filter_region
+        calls["crop_extent"] = crop_extent
         calls["coarsen"] = coarsen
         calls["nc_params"] = dict(nc_params)
         return _fake_fetch_topo()
 
     monkeypatch.setattr(topotools, "fetch_remote_topo", fake_fetch)
 
-    # extent='all' maps to filter_region=None and a DeprecationWarning is emitted.
+    # extent='all' maps to crop_extent=None and a DeprecationWarning is emitted.
     with pytest.warns(DeprecationWarning):
         topo = topotools.read_netcdf("etopo1", extent="all")
     assert isinstance(topo, topotools.Topography)
     assert calls["name_or_url"] == "etopo1"
-    assert calls["filter_region"] is None
+    assert calls["crop_extent"] is None
     assert calls["nc_params"] == {}
 
     # An explicit extent passes through; zvar maps to nc_params['z_var'].
     with pytest.warns(DeprecationWarning):
         topotools.read_netcdf("etopo1", extent=[-1, 1, -1, 1], zvar="Band1")
-    assert calls["filter_region"] == [-1, 1, -1, 1]
+    assert calls["crop_extent"] == [-1, 1, -1, 1]
     assert calls["nc_params"] == {"z_var": "Band1"}
 
 
@@ -768,7 +768,7 @@ def test_unstructured_topo():
     pytest.importorskip("scipy")
 
     fill_topo, topo = _make_unstructured_topo()
-    topo.interp_unstructured(fill_topo, extent=[0, 1, 0, 1], delta=(1e-2, 1e-2))
+    topo.interp_unstructured(fill_topo, crop_extent=[0, 1, 0, 1], delta=(1e-2, 1e-2))
     assert not topo.unstructured
     assert np.isfinite(topo.Z).all()
     
@@ -779,6 +779,66 @@ def test_unstructured_topo():
     compare_data = topotools.Topography(path=test_data_path)
     assert np.allclose(compare_data.Z[50, 50], compare_scalar)
     assert np.allclose(compare_data.Z, topo.Z)
+
+
+# --- Region-vocabulary unification: crop_extent + deprecated aliases ---
+
+@pytest.mark.python
+def test_crop_crop_extent_and_filter_region_alias():
+    """crop(): crop_extent is canonical; filter_region is a deprecated alias
+    that warns, gives an identical result, and errors if both are supplied."""
+    def topo_bowl(x, y):
+        return 1000.0 * (x**2 + y**2 - 1.0)
+    topo = topotools.Topography(topo_func=topo_bowl)
+    topo.x = np.linspace(-1.0, 3.0, 5)
+    topo.y = np.linspace(0.0, 3.0, 4)
+    _ = topo.Z  # realize lazy Z
+
+    region = [0, 1, 0, 2]
+    new = topo.crop(crop_extent=region)
+    with pytest.warns(DeprecationWarning):
+        old = topo.crop(filter_region=region)
+    assert np.allclose(new.Z, old.Z)
+    # positional first arg still binds to crop_extent
+    assert np.allclose(new.Z, topo.crop(region).Z)
+    # supplying both is ambiguous
+    with pytest.raises(TypeError):
+        topo.crop(crop_extent=region, filter_region=region)
+
+
+@pytest.mark.python
+def test_read_crop_extent_and_filter_region_alias():
+    """read(crop_extent=r) equals setting the attribute then reading; the
+    deprecated filter_region= alias warns and gives the same result."""
+    path = data_dir / "etopo1_10min.asc"
+    region = [-124.8, -124.0, 48.0, 48.5]
+
+    a = topotools.Topography()
+    a.read(path, topo_type=3, crop_extent=region)
+
+    b = topotools.Topography()
+    b.crop_extent = region
+    b.read(path, topo_type=3)
+
+    assert a.Z.shape == b.Z.shape
+    assert np.allclose(a.Z, b.Z)
+
+    c = topotools.Topography()
+    with pytest.warns(DeprecationWarning):
+        c.read(path, topo_type=3, filter_region=region)
+    assert np.allclose(a.Z, c.Z)
+
+
+@pytest.mark.python
+def test_interp_unstructured_extent_alias():
+    """interp_unstructured: crop_extent replaces the deprecated extent= kwarg."""
+    pytest.importorskip("scipy")
+    fill_a, topo_a = _make_unstructured_topo()
+    fill_b, topo_b = _make_unstructured_topo()
+    topo_a.interp_unstructured(fill_a, crop_extent=[0, 1, 0, 1], delta=(1e-2, 1e-2))
+    with pytest.warns(DeprecationWarning):
+        topo_b.interp_unstructured(fill_b, extent=[0, 1, 0, 1], delta=(1e-2, 1e-2))
+    assert np.allclose(topo_a.Z, topo_b.Z)
 
 
 def save_unstructured_test_data(output_dir):

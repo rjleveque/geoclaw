@@ -18,7 +18,7 @@ Two entry points are provided:
 """
 
 
-def fetch_etopo(name='etopo22_30sec', filter_region=None, coarsen=1, buffer=0,
+def fetch_etopo(name='etopo22_30sec', crop_extent=None, coarsen=1, buffer=0,
                 align=None, nc_params={}, verbose=False):
     r"""Fetch an ETOPO netCDF DEM as a `Topography`.
 
@@ -31,7 +31,7 @@ def fetch_etopo(name='etopo22_30sec', filter_region=None, coarsen=1, buffer=0,
 
      - *name* (str) - nickname (key of ``topotools.remote_topo_urls``) or a URL
        to an ETOPO netCDF file.  Default ``'etopo22_30sec'``.
-     - *filter_region* ([x1, x2, y1, y2] or None) - requested crop in domain
+     - *crop_extent* ([x1, x2, y1, y2] or None) - requested crop in domain
        coordinates; ``None`` reads the whole file.
      - *coarsen* (int) - coarsening factor (1 = none).
      - *buffer* (int) - points to keep outside the crop on each side.
@@ -47,7 +47,7 @@ def fetch_etopo(name='etopo22_30sec', filter_region=None, coarsen=1, buffer=0,
 
     from clawpack.geoclaw import topotools
 
-    return topotools.fetch_remote_topo(name, filter_region=filter_region,
+    return topotools.fetch_remote_topo(name, crop_extent=crop_extent,
                                        coarsen=coarsen, buffer=buffer,
                                        align=align, nc_params=nc_params,
                                        verbose=verbose)

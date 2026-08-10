@@ -279,7 +279,11 @@ class TopographyData(clawpack.clawutil.data.ClawData):
                 raw_type = entry.get('topo_type', None)
                 if raw_type is not None:
                     topo.topo_type = int(raw_type)
-                # 'extent' in the dict spec maps to 'crop_extent' on Topography
+                # The legacy dict key 'extent' is an alias for 'crop_extent'
+                # (the requested crop; see Topography "Region terminology").
+                # Note: if a spec supplies BOTH 'extent' and 'crop_extent', the
+                # 'crop_extent' key wins -- it is applied by the loop below,
+                # which runs after this alias assignment.
                 if 'extent' in entry:
                     topo.crop_extent = entry['extent']
                 for attr in ('crop_extent', 'coarsen', 'buffer', 'align',

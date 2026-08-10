@@ -313,6 +313,43 @@ def swapheader(inputfile, outputfile):
 
 
 
+# Sentinel for the deprecated crop-region kwargs (filter_region=, extent=).
+# Their real default (None) is itself a valid user value, so a distinct sentinel
+# is needed to tell "not passed" apart from "passed None".
+_CROP_EXTENT_UNSET = object()
+
+
+def _resolve_crop_extent(crop_extent, deprecated):
+    r"""Fold deprecated region kwargs onto ``crop_extent``.
+
+    The requested-crop rectangle has one canonical name, ``crop_extent`` (see the
+    "Region terminology" section of :class:`Topography`).  Older APIs spelled it
+    ``filter_region`` or ``extent``; this helper maps those onto ``crop_extent``.
+
+    :Input:
+     - *crop_extent* - the value of the canonical ``crop_extent`` argument.
+     - *deprecated* (dict) - maps each old kwarg name to the value it was called
+       with, or ``_CROP_EXTENT_UNSET`` if it was not passed.
+
+    For any old name that WAS passed, emit a ``DeprecationWarning`` and use its
+    value as ``crop_extent``; raise ``TypeError`` if ``crop_extent`` is also
+    supplied (ambiguous).
+    """
+    import warnings
+    for name, value in deprecated.items():
+        if value is _CROP_EXTENT_UNSET:
+            continue
+        if crop_extent is not None:
+            raise TypeError(
+                "Got both 'crop_extent' and the deprecated '%s'; "
+                "pass only 'crop_extent'." % name)
+        warnings.warn(
+            "The '%s' argument is deprecated; use 'crop_extent' instead." % name,
+            DeprecationWarning, stacklevel=3)
+        crop_extent = value
+    return crop_extent
+
+
 # ==============================================================================
 #  Topography class
 # ==============================================================================
@@ -338,6 +375,35 @@ class Topography(object):
         >>> topo_file = topo.Topography()
         >>> topo_file.read('./topo.tt3', topo_type=3)
         >>> topo_file.plot()
+
+    :Region terminology:
+
+    Several attributes/arguments describe rectangular regions, all ordered
+    ``[x1, x2, y1, y2]`` (x-pair then y-pair).  Two axes distinguish them:
+    *role* (a derived result vs. a requested crop) and *coordinate frame*
+    (domain vs. file).
+
+    - ``extent`` -- the *actual* bounds of the loaded data, in DOMAIN
+      coordinates.  A read-only, lazily-computed :func:`property` (a *result*,
+      not an input); see :attr:`extent`.
+    - ``crop_extent`` -- the *requested* crop rectangle, in DOMAIN coordinates.
+      This is the single canonical name for the request: it is both a persisted
+      attribute (default ``None`` = no crop) and the argument name accepted by
+      :meth:`read`, :meth:`crop`, :meth:`interp_unstructured`, and
+      :func:`fetch_remote_topo`.  ``read(crop_extent=r)`` is equivalent to
+      setting the attribute and then reading.  Mirrors Fortran
+      ``topo_crop_extent``.  (The older argument spellings ``filter_region`` and
+      ``extent=`` are deprecated aliases.)
+    - ``crop_bounds`` -- the same requested crop expressed in FILE coordinates.
+      Used only in the NetCDF (type-4) layer
+      (``netcdf_utils.FileMetadata.crop_bounds`` -> Fortran ``nc_crop_bounds``);
+      converted from ``crop_extent`` by subtracting ``lon_wrap_offset``/
+      ``x_shift``.
+    - ``crop()`` -- the operation that turns a ``crop_extent`` request (plus
+      ``coarsen``/``buffer``/``align``) into a new cropped object.
+
+    Convention: the ``_extent`` suffix denotes domain coordinates; ``_bounds``
+    denotes file coordinates.
 
     """
 
@@ -427,7 +493,15 @@ class Topography(object):
 
     @property
     def extent(self):
-        r"""Extent of the topography."""
+        r"""Actual bounds of the loaded data, ordered ``[x1, x2, y1, y2]``.
+
+        This is a derived *result* (the min/max of the loaded ``x``/``y``), in
+        domain coordinates -- not a requested crop; for the crop request see
+        ``crop_extent`` and the "Region terminology" section of the class
+        docstring.  Computed lazily and cached in ``_extent``; the cache is
+        invalidated (set to ``None``) whenever ``x``/``y`` change or ``read()``
+        reloads/crops the data.
+        """
         if self._extent is None:
             self._extent = ( numpy.min(self.x), numpy.max(self.x),
                              numpy.min(self.y), numpy.max(self.y) )
@@ -509,28 +583,15 @@ class Topography(object):
         self.coordinate_transform = lambda x,y: (x,y)
 
         # Preprocessing attributes — applied by read() after data is loaded.
-        #
-        # BOUNDS TERMINOLOGY (consistent across Python and Fortran):
-        #   * ``extent``      — the *actual* loaded-data bounds.  Read-only
-        #                       @property (below), in DOMAIN coordinates.
-        #   * ``crop_extent`` — the *requested* crop region, in DOMAIN
-        #                       coordinates.  Mirrors Fortran ``tp_crop_extent``
-        #                       and the gridded met module's ``crop_extent``.
-        #   * ``crop_bounds`` — the same region in FILE coordinates, carried
-        #                       only in the NetCDF (type-4) descriptor
-        #                       (``netcdf_utils.FileMetadata.crop_bounds`` ->
-        #                       Fortran ``nc_crop_bounds``).  The descriptor
-        #                       writer converts crop_extent -> crop_bounds by
-        #                       subtracting lon_wrap_offset/x_shift.
-        # Convention: the ``_extent`` suffix is domain coords; ``_bounds`` is
-        # file coords.  All 4-element vectors are ordered [x1, x2, y1, y2]
-        # (x-pair then y-pair).  'crop_extent' is named to avoid shadowing the
-        # 'extent' property above.
-        # PATH NOTE: 'path' already exists as an instance attribute set above.
-        # No topo_path alias is needed; callers should use self.path.
+        # See the "Region terminology" section of the class docstring for the
+        # extent / crop_extent / crop_bounds glossary and the Python<->Fortran
+        # name mapping. Convention recap: the ``_extent`` suffix is domain
+        # coords, ``_bounds`` is file coords, all ordered [x1, x2, y1, y2].
+        # PATH NOTE: 'path' already exists as an instance attribute set above;
+        # no topo_path alias is needed, callers should use self.path.
         self.crop_extent: list[float] | None = None  # [x1,x2,y1,y2]; None=full domain
         self.coarsen: int = 1
-        self.buffer: float = 0.0
+        self.buffer: int = 0
         self.align = None
         self.x_shift: float = 0.0
         self.y_shift: float = 0.0
@@ -698,8 +759,8 @@ class Topography(object):
 
 
     def read(self, path=None, topo_type=None, unstructured=False,
-             mask=False, filter_region=None, force=False, stride=[1, 1],
-             nc_params={}):
+             mask=False, crop_extent=None, force=False, stride=[1, 1],
+             nc_params={}, filter_region=_CROP_EXTENT_UNSET):
         r"""Read in the data from the object's *path* attribute.
 
         Stores the resulting data in one of the sets of *x*, *y*, and *z* or
@@ -711,7 +772,13 @@ class Topography(object):
          - *unstructured* (bool) - default is False for lat-long grids.
          - *mask* (bool) - whether to store as masked array for missing
            values (default if False)
-         - *filter_region* (tuple)
+         - *crop_extent* ([x1, x2, y1, y2] or None) - requested crop region in
+           domain coordinates (see the "Region terminology" section of the
+           class docstring). Passing it here is equivalent to setting the
+           ``crop_extent`` attribute before calling ``read()``; the crop is
+           applied (together with ``coarsen``/``buffer``/``align``) via
+           :meth:`crop`. Default ``None`` = no crop. The older ``filter_region``
+           keyword is a deprecated alias.
          - *stride* (list) - List of strides for the x and y dimensions
            respectively.  Default is *[1, 1]*.  Note that this is only
            implemented for NetCDF reading currently.
@@ -729,6 +796,14 @@ class Topography(object):
         The first three might have already been set when instatiating object.
 
         """
+
+        # A crop_extent passed here is equivalent to setting the attribute first;
+        # fold the deprecated filter_region alias onto it, then store it so the
+        # single attribute-driven crop below (and the type-4 pushdown) apply it.
+        crop_extent = _resolve_crop_extent(crop_extent,
+                                           {'filter_region': filter_region})
+        if crop_extent is not None:
+            self.crop_extent = crop_extent
 
         if (path is None) and (self.path is None):
             raise ValueError("*** Need to set path for file to read")
@@ -765,17 +840,17 @@ class Topography(object):
             points = []
             values = []
 
-            # Filter region if requested
-            if filter_region is not None:
+            # Filter region if requested (crop_extent, domain coords)
+            if self.crop_extent is not None:
                 for coordinate in data:
-                    if filter_region[0] <= coordinate[0] <= filter_region[1]:
-                        if filter_region[2] <= coordinate[1] <= filter_region[3]:
+                    if self.crop_extent[0] <= coordinate[0] <= self.crop_extent[1]:
+                        if self.crop_extent[2] <= coordinate[1] <= self.crop_extent[3]:
                             points.append(coordinate[0:2])
                             values.append(coordinate[2])
 
                 if len(points) == 0:
                     raise Exception("No points were found inside requested " \
-                                  + "filter region.")
+                                  + "crop_extent region.")
 
                 # Cast lists as ndarrays
                 self._x = numpy.array(points[:,0])
@@ -804,7 +879,7 @@ class Topography(object):
                 _preprocessing_requested = (
                     self.crop_extent is not None
                     or self.coarsen != 1
-                    or self.buffer != 0.0
+                    or self.buffer != 0
                     or self.align is not None
                     or self.x_shift != 0.0
                     or self.y_shift != 0.0
@@ -1029,21 +1104,6 @@ class Topography(object):
             if mask:
                 self._Z = numpy.ma.masked_invalid(self._Z)
 
-            # Perform region filtering by delegating to crop() so the index
-            # bounds are computed in exactly one place and are inclusive of the
-            # filter_region edges (the previous inline slice dropped the upper
-            # edge row/column).
-            if filter_region is not None:
-                _filtered = self.crop(filter_region=filter_region)
-                if _filtered is not None:
-                    self._x = _filtered._x
-                    self._y = _filtered._y
-                    self._Z = _filtered._Z
-                    self._X = None
-                    self._Y = None
-                    self._extent = None
-                    self._delta = None
-
             # ---------------------------------------------------------------
             # Apply preprocessing attributes in-memory (original file unchanged).
             # Fortran applies the same attributes independently in read_topo_file
@@ -1070,7 +1130,7 @@ class Topography(object):
                 self._extent = None
             if self.crop_extent is not None or self.coarsen > 1:
                 _cropped = self.crop(
-                    filter_region=self.crop_extent,
+                    crop_extent=self.crop_extent,
                     coarsen=int(self.coarsen),
                     buffer=int(self.buffer),
                     align=self.align,
@@ -1632,17 +1692,18 @@ class Topography(object):
         return axes
 
 
-    def interp_unstructured(self, fill_topo, extent=None, method='nearest',
+    def interp_unstructured(self, fill_topo, crop_extent=None, method='nearest',
                                    delta=None, delta_limit=20.0,
                                    no_data_value=-99999, buffer_length=100.0,
                                    proximity_radius=100.0,
-                                   resolution_limit=2000):
+                                   resolution_limit=2000,
+                                   extent=_CROP_EXTENT_UNSET):
         r"""Interpolate unstructured data on to regular grid.
 
         Function to interpolate the unstructured data in the topo object onto a
         structured grid.  Utilizes a bounding box plus a buffer of size
-        *buffer_length* (meters) containing all data unless *extent is not None*
-        is *True*.  Then uses the fill topography *fill_topo* to fill in the
+        *buffer_length* (meters) containing all data unless *crop_extent is not
+        None* is *True*.  Then uses the fill topography *fill_topo* to fill in the
         gaps in the unstructured data.  By default this is done by masking the
         fill data with the extents, the value *no_data_value* and if
         *proximity_radius* (meters) is not 0, by a radius of *proximity_radius*
@@ -1659,8 +1720,10 @@ class Topography(object):
         :Input:
          - *fill_topo* (list) - List of Topography objects to use as fill data
            in the projection.
-         - *extent* (tuple) - A tuple defining the rectangle of the sub-section.
-           Must be in the form (x lower,x upper,y lower, y upper).
+         - *crop_extent* (tuple) - A tuple defining the rectangle of the
+           sub-section, in the form (x1, x2, y1, y2). Default ``None`` uses the
+           data bounding box plus *buffer_length*. The older ``extent`` keyword
+           is a deprecated alias.
          - *method* (string) - Method used for interpolation, valid methods are
            found in *scipy.interpolate.griddata*.  Default is *nearest*.
          - *delta* (tuple) - Directly set the grid spacing of the interpolation
@@ -1672,7 +1735,7 @@ class Topography(object):
          - *no_data_value* (float) - Value to use if no data was found to fill in a
            missing value, ignored if `method = 'nearest'`. Default is `-99999`.
          - *buffer_length* (float) - Buffer around bounding box, only applicable
-           when *extent* is None.  Default is `100.0` meters.
+           when *crop_extent* is None.  Default is `100.0` meters.
          - *proximity_radius* (float) - Radius every unstructured data point
            used to mask the fill data with.  Default is `100.0` meters.
          - *resolution_limit* (int) - Limit the number of grid points in a
@@ -1682,6 +1745,10 @@ class Topography(object):
         Sets this object's *unstructured* attribute to *False* if successful.
 
         """
+
+        crop_extent = _resolve_crop_extent(crop_extent, {'extent': extent})
+        # Internal working name for the interpolation output bounding box.
+        extent = crop_extent
 
         import scipy.interpolate as interpolate
         from scipy.spatial import cKDTree
@@ -1920,18 +1987,23 @@ class Topography(object):
                 self.Z[index[0], index[1]] = summation / num_points
 
 
-    def crop(self, filter_region=None, coarsen=1, buffer=0, align=None):
-        r"""Crop region to *filter_region*
+    def crop(self, crop_extent=None, coarsen=1, buffer=0, align=None,
+             filter_region=_CROP_EXTENT_UNSET):
+        r"""Crop region to *crop_extent*
 
         Create a new Topography object that is identical to this one but cropped
-        to the region specified by filter_region
+        to the region specified by *crop_extent* (see the "Region terminology"
+        section of the class docstring).
 
         :Input:
 
-            - *filter_region* (tuple): (x1,x2,y1,y2) desired new extent
+            - *crop_extent* (tuple): (x1,x2,y1,y2) desired new extent, in domain
+              coordinates. Default ``None`` crops to the current ``extent`` (so
+              only *coarsen* has effect). The older ``filter_region`` keyword is
+              a deprecated alias.
             - *coarsen* (int): coarsening factor (by subsampling)
             - *buffer* (int): when possible, have at least this many points
-                                outside the filter_region on each side
+                                outside the crop_extent on each side
             - *align* (tuple): (xalign,yalign) = desired alignment if coarsening
 
         Setting *buffer > 0* may be useful to insure that the
@@ -1973,28 +2045,31 @@ class Topography(object):
            leave the resulting topography as unstructured effectively.
         """
 
+        crop_extent = _resolve_crop_extent(crop_extent,
+                                           {'filter_region': filter_region})
+
         if self.unstructured:
             raise NotImplementedError("*** Cannot currently crop unstructured topo")
 
-        if filter_region is None:
+        if crop_extent is None:
             # only want to coarsen, so this is entire region:
-            #filter_region = [self.x[0],self.x[-1],self.y[0],self.y[-1]]
-            filter_region = self.extent
+            #crop_extent = [self.x[0],self.x[-1],self.y[0],self.y[-1]]
+            crop_extent = self.extent
 
-        xlower,xupper,ylower,yupper = filter_region
+        xlower,xupper,ylower,yupper = crop_extent
 
         dx,dy = self.delta
         dx_new = dx*coarsen
         dy_new = dy*coarsen
 
-        # Find indices of topo arrays in filter_region:
+        # Find indices of topo arrays in crop_extent:
         try:
-            ilower = (self.x >= filter_region[0]).nonzero()[0][0]
-            iupper = (self.x <= filter_region[1]).nonzero()[0][-1]
-            jlower = (self.y >= filter_region[2]).nonzero()[0][0]
-            jupper = (self.y <= filter_region[3]).nonzero()[0][-1]
+            ilower = (self.x >= crop_extent[0]).nonzero()[0][0]
+            iupper = (self.x <= crop_extent[1]).nonzero()[0][-1]
+            jlower = (self.y >= crop_extent[2]).nonzero()[0][0]
+            jupper = (self.y <= crop_extent[3]).nonzero()[0][-1]
         except:
-            print('*** filter_region does not overlap topo')
+            print('*** crop_extent does not overlap topo')
             return None
 
         # shift indices if needed for alignment:
@@ -2182,7 +2257,7 @@ remote_topo_urls['strait_of_juan_de_fuca'] = \
 
 
 
-def fetch_remote_topo(name_or_url, filter_region=None, coarsen=1, buffer=0,
+def fetch_remote_topo(name_or_url, crop_extent=None, coarsen=1, buffer=0,
                       align=None, nc_params={}, verbose=False):
     r"""Resolve a remote (or local) netCDF DEM into a `Topography`.
 
@@ -2198,12 +2273,12 @@ def fetch_remote_topo(name_or_url, filter_region=None, coarsen=1, buffer=0,
      - *name_or_url* (str) - a key into `topotools.remote_topo_urls`, or a URL
        (OPeNDAP/THREDDS `dodsC` URLs are read by xarray's netCDF4 backend), or a
        path to a local netCDF file.
-     - *filter_region* ([x1, x2, y1, y2] or None) - requested crop in domain
+     - *crop_extent* ([x1, x2, y1, y2] or None) - requested crop in domain
        coordinates; `None` reads the whole file.  Only the requested hyperslab
        is read from a remote file.
      - *coarsen* (int) - factor to coarsen by (1 = no coarsening).
      - *buffer* (int) - when possible, keep at least this many points outside
-       `filter_region` on each side.
+       `crop_extent` on each side.
      - *align* ((xalign, yalign) or None) - desired alignment when coarsening;
        see `Topography.crop`.
      - *nc_params* (dict) - options forwarded to the `topo_type=4` reader, e.g.
@@ -2222,7 +2297,7 @@ def fetch_remote_topo(name_or_url, filter_region=None, coarsen=1, buffer=0,
 
         from clawpack.geoclaw import topotools
         topo = topotools.fetch_remote_topo('etopo22_30sec',
-                                           filter_region=[-126, -122, 46, 49],
+                                           crop_extent=[-126, -122, 46, 49],
                                            coarsen=2, buffer=1, verbose=True)
         topo.write('etopo_sample.tt3', topo_type=3)
     """
@@ -2240,7 +2315,7 @@ def fetch_remote_topo(name_or_url, filter_region=None, coarsen=1, buffer=0,
     # reads immediately when constructed with a path, which would default these
     # away, so construct empty and read explicitly.
     topo = Topography()
-    topo.crop_extent = filter_region
+    topo.crop_extent = crop_extent
     topo.coarsen = coarsen
     topo.buffer = buffer
     topo.align = align
@@ -2295,13 +2370,13 @@ def read_netcdf(path, zvar=None, extent='all', coarsen=1, return_topo=True,
         '*** coarsen must be a positive integer'
 
     # Map the legacy arguments onto the modern helper.
-    filter_region = None if (isinstance(extent, str) and extent == 'all') \
+    crop_extent = None if (isinstance(extent, str) and extent == 'all') \
         else extent
     nc_params = {}
     if zvar is not None:
         nc_params['z_var'] = zvar
 
-    topo = fetch_remote_topo(path, filter_region=filter_region, coarsen=coarsen,
+    topo = fetch_remote_topo(path, crop_extent=crop_extent, coarsen=coarsen,
                              buffer=buffer, align=align, nc_params=nc_params,
                              verbose=verbose)
 
