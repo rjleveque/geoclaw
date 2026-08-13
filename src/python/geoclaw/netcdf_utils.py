@@ -1671,6 +1671,7 @@ class CFNormalizer:
     Normalize CF metadata in an xarray Dataset.
 
     Performs in-memory attribute fixups:
+
     * Renames coordinate variables to CF standard names where unambiguous.
     * Adds ``standard_name``, ``axis``, and ``units`` attributes to coordinate
       variables if missing.
