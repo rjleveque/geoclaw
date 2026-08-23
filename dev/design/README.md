@@ -31,3 +31,16 @@ lost. Several of these docs *were* lost that way (they lived in a gitignored
    bare "done", so drift is visible.
 3. **Archive, don't delete.** When a doc is superseded, keep the reasoning and
    mark it superseded rather than removing history.
+
+## Contents
+
+- `met\_forcing\_refactor.md` — design record for the surge→met object-model + Fortran
+  rename refactor (**\*\*complete\*\***; recovered verbatim from git).
+- `met\_forcing\_docs\_plan.md` — documentation/transition-guide/tutorial plan
+  (approved, execution deferred; recovered verbatim from git).
+- `met\_forcing\_roadmap.md` — living post-refactor roadmap (S/M/L work items;
+  reconstructed from the vault mirror, git-verified).
+- `met\_wind\_field\_generator.md` — parametric TC wind-field generator design &
+  verification plan (**\*\*partial reconstruction\*\***; original lost, no full mirror).
+- `friction-file-plan.md` — file-based friction field input implementation plan
+  (relocated from `.plans/`).
