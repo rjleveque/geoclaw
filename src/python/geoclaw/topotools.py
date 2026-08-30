@@ -91,43 +91,98 @@ def determine_topo_type(path, default=None):
     return topo_type
 
 
-def _netcdf_window_indices(coords, lo, hi, margin, n, stride=1):
-    r"""Half-open index window ``[i0, i1)`` into 1-D monotonic *coords*.
+def _crop_indices(x, y, crop_extent, coarsen, buffer, align):
+    r"""Half-open index bounds for a crop+coarsen+align window.
 
-    Used by :meth:`Topography.read` to push a ``crop_extent`` down to the
-    NetCDF read so only the needed hyperslab is loaded from disk (rather than
-    materializing a whole global variable and cropping afterward).
+    Returns ``(ilower, iupper, jlower, jupper)`` to be sliced as
+    ``arr[jlower:jupper:coarsen, ilower:iupper:coarsen]`` (and the coordinate
+    subsets ``x[ilower:iupper:coarsen]``, ``y[jlower:jupper:coarsen]``), or
+    ``None`` if *crop_extent* does not overlap the data.
+
+    This is the shared coarsen/align index arithmetic used by both
+    :meth:`Topography.crop` (on the in-memory arrays) and the ``topo_type=4``
+    read (on the cheap 1-D NetCDF coordinate arrays), so ASCII and NetCDF reads
+    of the same data produce identical grids.
 
     :Input:
-     - *coords* (ndarray) - 1-D coordinate array, monotonic ascending **or**
-       descending (as stored in the file).
-     - *lo*, *hi* (float) - requested inclusive coordinate bounds.
-     - *margin* (int) - extra points to keep on each side so that a subsequent
-       :meth:`Topography.crop` still has every point it needs (its own buffer
-       plus the ``coarsen`` alignment search).
-     - *n* (int) - length of *coords*.
-     - *stride* (int) - read stride; the low index is snapped **down** to a
-       multiple of *stride* so the strided sub-window shares the same phase as
-       striding the full array, keeping the sampled grid identical.
+     - *x*, *y* (ndarray) - 1-D coordinate arrays, **ascending** (precondition;
+       this routine contains no N->S/E->W flip logic).
+     - *crop_extent* ([x1, x2, y1, y2]) - requested crop in the same coords.
+     - *coarsen* (int) - subsampling factor; ``align`` only has effect when
+       ``coarsen > 1``.
+     - *buffer* (int) - grid points to keep outside *crop_extent* on each side
+       (expanded by ``buffer*coarsen`` native points, as in :meth:`crop`).
+     - *align* ((xalign, yalign) or None) - desired alignment when coarsening;
+       ``None`` means no phase snap (start at the crop window).
 
-    Returns ``(0, n)`` (the full range) when the interval does not overlap
-    *coords*, mirroring ``crop()``'s fall-back of leaving the array uncropped
-    when the filter region misses the topography.
+    ``coarsen`` and ``buffer`` are assumed already ``int()``-coerced.
     """
-    # A monotonic array clipped to [lo, hi] yields a contiguous True block for
-    # either sort order, so first/last True index bound the window.
-    mask = (coords >= lo) & (coords <= hi)
-    idx = numpy.nonzero(mask)[0]
-    if idx.size == 0:
-        return 0, n
-    i0 = max(0, int(idx[0]) - margin)
-    i1 = min(n, int(idx[-1]) + margin + 1)
-    # Snap the low index down to a multiple of stride so coords[i0:i1:stride]
-    # is a phase-aligned subset of coords[::stride].
-    i0 -= i0 % stride
-    if i1 <= i0:
-        return 0, n
-    return i0, i1
+    # dx/dy computed the same way as the `delta` property (round to 15 places),
+    # so the align fractional-offset search matches crop() bit-for-bit.
+    dx = numpy.round(abs(x[1] - x[0]), 15)
+    dy = numpy.round(abs(y[1] - y[0]), 15)
+    dx_new = dx * coarsen
+    dy_new = dy * coarsen
+
+    # Find indices of the arrays inside crop_extent:
+    try:
+        ilower = (x >= crop_extent[0]).nonzero()[0][0]
+        iupper = (x <= crop_extent[1]).nonzero()[0][-1]
+        jlower = (y >= crop_extent[2]).nonzero()[0][0]
+        jupper = (y <= crop_extent[3]).nonzero()[0][-1]
+    except IndexError:
+        # crop_extent does not overlap the data
+        return None
+
+    # Shift indices if needed for alignment (matches crop() lines historically
+    # at 2085-2099: pick the low index whose coord best lands on `align`).
+    if (coarsen > 1) and (align is not None):
+        xs = numpy.array([x[ilower + i] for i in range(coarsen)])
+        offsets = (xs - align[0]) / dx_new
+        offsets_frac = offsets - numpy.round(offsets)
+        ioffset = numpy.argmin(abs(offsets_frac))
+        ilower = ilower + ioffset
+        iupper = iupper - numpy.remainder(iupper - ilower, coarsen)
+
+        ys = numpy.array([y[jlower + j] for j in range(coarsen)])
+        offsets = (ys - align[1]) / dy_new
+        offsets_frac = offsets - numpy.round(offsets)
+        joffset = numpy.argmin(abs(offsets_frac))
+        jlower = jlower + joffset
+        jupper = jupper - numpy.remainder(jupper - jlower, coarsen)
+
+    # buffer, checking limits of arrays:
+    ilower = numpy.maximum(0, ilower - buffer * coarsen)
+    jlower = numpy.maximum(0, jlower - buffer * coarsen)
+    iupper = numpy.minimum(len(x) - 1, iupper + buffer * coarsen) + 1
+    jupper = numpy.minimum(len(y) - 1, jupper + buffer * coarsen) + 1
+
+    return int(ilower), int(iupper), int(jlower), int(jupper)
+
+
+def _axis_file_slice(coord_full, descending, lo, hi, step, n):
+    r"""Map an ascending window ``[lo:hi:step]`` to a positive-stride slice.
+
+    Used by the ``topo_type=4`` read: :func:`_crop_indices` returns bounds into
+    an *ascending* view of a file axis, but NetCDF/xarray lazy indexing requires
+    a **positive** step into the *file-order* axis.  For an axis stored
+    descending (e.g. latitude N->S), the ascending sample indices
+    ``lo, lo+step, ..., lo+(m-1)*step`` map to file indices ``n-1-(that)``, whose
+    minimum is ``f0``; reading ``slice(f0, f0+m*step, step)`` returns those same
+    ``m`` samples in file (descending) order, to be flipped to ascending in
+    memory afterward.
+
+    Returns ``(file_slice, coord_subset, flip)`` where
+    ``coord_subset == coord_full[file_slice]`` and ``flip`` is True when the
+    subset (and the corresponding data axis) must be reversed to be ascending.
+    """
+    if not descending:
+        sl = slice(lo, hi, step)
+        return sl, coord_full[sl], False
+    m = len(range(lo, hi, step))
+    f0 = n - 1 - (lo + (m - 1) * step)
+    sl = slice(f0, f0 + m * step, step)
+    return sl, coord_full[sl], True
 
 
 def create_topo_func(loc,verbose=False):
@@ -317,6 +372,12 @@ def swapheader(inputfile, outputfile):
 # Their real default (None) is itself a valid user value, so a distinct sentinel
 # is needed to tell "not passed" apart from "passed None".
 _CROP_EXTENT_UNSET = object()
+
+# Sentinel for read()'s align= kwarg.  align=None is a valid user value ("no
+# phase snap"), and callers such as fetch_remote_topo set the self.align
+# attribute *before* calling read(); a distinct sentinel lets read() tell "not
+# passed" (leave self.align alone) apart from "passed None" (override it).
+_ALIGN_UNSET = object()
 
 
 def _resolve_crop_extent(crop_extent, deprecated):
@@ -759,7 +820,8 @@ class Topography(object):
 
 
     def read(self, path=None, topo_type=None, unstructured=False,
-             mask=False, crop_extent=None, force=False, stride=[1, 1],
+             mask=False, crop_extent=None, force=False,
+             coarsen=None, align=_ALIGN_UNSET, buffer=None, stride=None,
              nc_params={}, filter_region=_CROP_EXTENT_UNSET):
         r"""Read in the data from the object's *path* attribute.
 
@@ -779,9 +841,23 @@ class Topography(object):
            applied (together with ``coarsen``/``buffer``/``align``) via
            :meth:`crop`. Default ``None`` = no crop. The older ``filter_region``
            keyword is a deprecated alias.
-         - *stride* (list) - List of strides for the x and y dimensions
-           respectively.  Default is *[1, 1]*.  Note that this is only
-           implemented for NetCDF reading currently.
+         - *coarsen* (int) - subsampling factor (1 = no coarsening).  Applied
+           identically for ASCII and NetCDF reads.  Passing it here is
+           equivalent to setting the ``coarsen`` attribute before ``read()``.
+           See :meth:`crop`.
+         - *align* ((xalign, yalign) or None) - desired alignment when
+           coarsening; see :meth:`crop`.  ``None`` (the default) means **no
+           phase snap** -- subsampling starts at the crop window, matching
+           ASCII/:meth:`crop`.  (This differs from the old NetCDF ``stride``
+           behavior, which snapped to the file's grid origin.)  Pass e.g.
+           ``align=[integer_lon, integer_lat]`` to lock the coarsened grid to a
+           fixed lattice regardless of the requested ``crop_extent``.
+         - *buffer* (int) - grid points to keep outside ``crop_extent`` on each
+           side; see :meth:`crop`.
+         - *stride* (list or int) - **Deprecated**: use ``coarsen`` instead.
+           A NetCDF-only knob that silently did nothing for ASCII reads and used
+           a different alignment convention.  A scalar (or equal-valued list) is
+           mapped onto ``coarsen``; per-axis striding is no longer supported.
          - *nc_params* (dict) - options for NetCDF (`topo_type=4`) reading:
 
              - `z_var` (str): name of the elevation variable, if it cannot be
@@ -804,6 +880,46 @@ class Topography(object):
                                            {'filter_region': filter_region})
         if crop_extent is not None:
             self.crop_extent = crop_extent
+
+        # Fold coarsen/align/buffer args onto the attributes (mirrors crop_extent
+        # above): passing them to read() is equivalent to setting the attribute
+        # first.  Sentinels distinguish "not passed" from an explicit value so a
+        # caller that presets self.align/self.coarsen/self.buffer before read()
+        # (e.g. fetch_remote_topo) is not silently clobbered.
+        if coarsen is not None:
+            self.coarsen = int(coarsen)
+        if buffer is not None:
+            self.buffer = int(buffer)
+        if align is not _ALIGN_UNSET:
+            self.align = align
+
+        # `stride` is deprecated: a NetCDF-only knob that silently did nothing
+        # for ASCII reads and used a different alignment convention than
+        # crop()/coarsen.  Map it onto the unified scalar `coarsen`.
+        if stride is not None:
+            import warnings
+            warnings.warn(
+                "The 'stride' argument to Topography.read() is deprecated; use "
+                "'coarsen' (a scalar subsampling factor) instead.  'coarsen' is "
+                "applied identically for ASCII and NetCDF reads.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if numpy.ndim(stride) == 0:
+                _stride = int(stride)
+            else:
+                _s = list(stride)
+                if len(_s) == 0 or any(int(v) != int(_s[0]) for v in _s):
+                    raise ValueError(
+                        "Per-axis stride is no longer supported; 'coarsen' is a "
+                        "single scalar factor.  Got stride=%r." % (stride,))
+                _stride = int(_s[0])
+            if _stride != 1:
+                if self.coarsen != 1 and self.coarsen != _stride:
+                    raise ValueError(
+                        "Pass either 'stride' or 'coarsen', not both "
+                        "(stride=%r, coarsen=%r)." % (stride, self.coarsen))
+                self.coarsen = _stride
 
         if (path is None) and (self.path is None):
             raise ValueError("*** Need to set path for file to read")
@@ -992,43 +1108,66 @@ class Topography(object):
                     # Topography.
                     _da = _da.transpose(_y_name, _x_name)
 
-                    # Push both `stride` and `crop_extent` down to xarray's lazy
-                    # indexing so the NetCDF backend reads ONLY the requested
+                    # Push the crop+coarsen+align window down to xarray's lazy
+                    # indexing so the NetCDF backend reads ONLY the final
                     # hyperslab.  Otherwise `_da.values` materializes the whole
                     # variable (a global DEM is many GB, and CF fill decoding
                     # promotes it to float), which is prohibitively slow and can
-                    # exhaust memory even when the caller asked for a small
-                    # subset.  The crop window is computed on the cheap 1-D
-                    # coordinate arrays and expanded by a margin so the post-read
-                    # crop() below still reproduces its exact bounds/buffer/
-                    # align/coarsen result on the in-memory sub-window.
+                    # exhaust memory even when the caller asked for a small,
+                    # coarsened subset.  The window is computed on the cheap 1-D
+                    # coordinate arrays via _crop_indices -- the SAME routine
+                    # crop() uses -- so this read matches an ASCII read + crop()
+                    # of the same data exactly; the post-read crop() is then
+                    # skipped for topo_type 4 (the data is already final).
                     _nx = _lon_full.size
                     _ny = _lat_full.size
+                    _c = max(int(self.coarsen), 1)
+
+                    # _crop_indices requires ascending coords; build ascending
+                    # views of the file axes (lon is usually ascending, lat is
+                    # often stored N→S).
+                    _lon_desc = _lon_full[0] > _lon_full[-1]
+                    _lat_desc = not _meta.y_increasing
+                    _lon_asc = _lon_full[::-1] if _lon_desc else _lon_full
+                    _lat_asc = _lat_full[::-1] if _lat_desc else _lat_full
+
                     if self.crop_extent is not None:
-                        _x1, _x2, _y1, _y2 = self.crop_extent
-                        _margin = (int(self.buffer) + 1) * max(int(self.coarsen), 1)
-                        _i0, _i1 = _netcdf_window_indices(
-                            _lon_full, _x1, _x2, _margin, _nx, stride[0]
-                        )
-                        _j0, _j1 = _netcdf_window_indices(
-                            _lat_full, _y1, _y2, _margin, _ny, stride[1]
-                        )
+                        _ce = list(self.crop_extent)
                     else:
-                        _i0, _i1 = 0, _nx
-                        _j0, _j1 = 0, _ny
+                        # whole file (mirrors crop()'s crop_extent=self.extent)
+                        _ce = [_lon_asc[0], _lon_asc[-1],
+                               _lat_asc[0], _lat_asc[-1]]
 
-                    _da = _da.isel({
-                        _y_name: slice(_j0, _j1, stride[1]),
-                        _x_name: slice(_i0, _i1, stride[0]),
-                    })
+                    _idx = _crop_indices(_lon_asc, _lat_asc, _ce, _c,
+                                         int(self.buffer), self.align)
+                    if _idx is None:
+                        # crop_extent misses the file: fall back to the full grid
+                        # at native resolution (mirrors crop() returning None ->
+                        # no-op), rather than coarsening the whole file.
+                        _il, _iu, _jl, _ju = 0, _nx, 0, _ny
+                        _step = 1
+                    else:
+                        _il, _iu, _jl, _ju = _idx
+                        _step = _c
+
+                    # Map each ascending [lo:hi:step] window to a positive-stride
+                    # slice into the FILE-order axis; descending axes are flipped
+                    # in memory afterward.
+                    _x_slice, _lon_vals, _flip_x = _axis_file_slice(
+                        _lon_full, _lon_desc, _il, _iu, _step, _nx)
+                    _y_slice, _lat_vals, _flip_y = _axis_file_slice(
+                        _lat_full, _lat_desc, _jl, _ju, _step, _ny)
+
+                    _da = _da.isel({_y_name: _y_slice, _x_name: _x_slice})
                     _z_vals = numpy.asarray(_da.values, dtype=float)
-                    _lon_vals = _lon_full[_i0:_i1:stride[0]]
-                    _lat_vals = _lat_full[_j0:_j1:stride[1]]
 
-                    # Flip to S→N (y increasing) if file stores N→S
-                    if not _meta.y_increasing:
+                    # Flip descending axes to ascending (S→N, W→E) in memory.
+                    if _flip_y:
                         _lat_vals = _lat_vals[::-1]
                         _z_vals = _z_vals[::-1, :]
+                    if _flip_x:
+                        _lon_vals = _lon_vals[::-1]
+                        _z_vals = _z_vals[:, ::-1]
 
                     # Apply unit conversion if source is not already meters
                     _contract = _NC_UNITS.get('topo', 'm')
@@ -1114,7 +1253,10 @@ class Topography(object):
             #   3. x_shift   (shift x array; Fortran shifts xlowtopo/xhitopo)
             #   3b. y_shift  (shift y array; Fortran shifts ylowtopo/yhitopo)
             #   4+5. crop + coarsen via self.crop() (Fortran: crop+buffer done,
-            #        coarsen not yet implemented)
+            #        coarsen not yet implemented).  SKIPPED for topo_type 4:
+            #        the NetCDF read already applied crop+coarsen+align+buffer
+            #        via _crop_indices while reading the hyperslab, so running
+            #        crop() again would double-coarsen.
             # Steps are skipped when the attribute equals its default value.
             # ---------------------------------------------------------------
             if self.negate_z:
@@ -1128,7 +1270,8 @@ class Topography(object):
             if self.y_shift != 0.0:
                 self._y = self._y + self.y_shift
                 self._extent = None
-            if self.crop_extent is not None or self.coarsen > 1:
+            if abs(self.topo_type) != 4 \
+                    and (self.crop_extent is not None or self.coarsen > 1):
                 _cropped = self.crop(
                     crop_extent=self.crop_extent,
                     coarsen=int(self.coarsen),
@@ -2071,39 +2214,13 @@ class Topography(object):
         dx_new = dx*coarsen
         dy_new = dy*coarsen
 
-        # Find indices of topo arrays in crop_extent:
-        try:
-            ilower = (self.x >= crop_extent[0]).nonzero()[0][0]
-            iupper = (self.x <= crop_extent[1]).nonzero()[0][-1]
-            jlower = (self.y >= crop_extent[2]).nonzero()[0][0]
-            jupper = (self.y <= crop_extent[3]).nonzero()[0][-1]
-        except:
+        # Find crop+coarsen+align index window (shared with the topo_type=4
+        # read path so ASCII and NetCDF reads of the same data match exactly).
+        idx = _crop_indices(self.x, self.y, crop_extent, coarsen, buffer, align)
+        if idx is None:
             print('*** crop_extent does not overlap topo')
             return None
-
-        # shift indices if needed for alignment:
-        if (coarsen > 1) and (align is not None):
-            xs = numpy.array([self.x[ilower + i] for i in range(coarsen)])
-            offsets = (xs - align[0]) / dx_new
-            offsets_frac = offsets - numpy.round(offsets)
-            ioffset = numpy.argmin(abs(offsets_frac))
-            ilower = ilower + ioffset
-            iupper = iupper - numpy.remainder(iupper-ilower, coarsen)
-            #print(f'+++ shifted ilower by ioffset={ioffset} to {ilower}')
-
-            ys = numpy.array([self.y[jlower + j] for j in range(coarsen)])
-            offsets = (ys - align[1]) / dy_new
-            offsets_frac = offsets - numpy.round(offsets)
-            joffset = numpy.argmin(abs(offsets_frac))
-            jlower = jlower + joffset
-            jupper = jupper - numpy.remainder(jupper-jlower, coarsen)
-            #print(f'+++ shifted jlower by joffset={joffset} to {jlower}')
-
-        # buffer, checking limits of arrays:
-        ilower = numpy.maximum(0, ilower - buffer*coarsen)
-        jlower = numpy.maximum(0, jlower - buffer*coarsen)
-        iupper = numpy.minimum(len(self.x)-1, iupper + buffer*coarsen) + 1
-        jupper = numpy.minimum(len(self.y)-1, jupper + buffer*coarsen) + 1
+        ilower, iupper, jlower, jupper = idx
 
         # Create new topography object:
         newtopo = Topography()
