@@ -155,10 +155,13 @@ class RefinementData(clawpack.clawutil.data.ClawData):
 
 
 def _write_preprocessing_block(f, t):
-    """Write the 7 preprocessing-attribute lines for one topo/dtopo file.
+    """Write the 8 preprocessing-attribute lines for one topo/dtopo file.
+
+    The lines are, in order: crop_extent, coarsen, buffer, align, x_shift,
+    y_shift, z_shift, negate_z.
 
     Shared by TopographyData.write() (topo.data) and DTopoData.write()
-    (dtopo.data); Fortran reads the same 7 lines in read_topo_settings and
+    (dtopo.data); Fortran reads the same 8 lines in read_topo_settings and
     read_dtopo_settings.  *t* is a Topography or DTopography object.
 
     Float values use repr (shortest round-trip representation) so coordinates
