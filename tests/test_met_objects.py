@@ -18,12 +18,13 @@ refactor -- :class:`Track`, :class:`StormTrack`,
 
 from pathlib import Path
 import sys
+import warnings
 
 import numpy as np
 import pytest
 
 import clawpack.geoclaw.met.storm as storm
-from clawpack.geoclaw.met.track import Track, StormTrack
+from clawpack.geoclaw.met.track import Track, StormTrack, fill_rad_w_other_source
 from clawpack.geoclaw.met.parametric import ParametricMetForcing
 from clawpack.geoclaw.met.gridded import GriddedMetForcing
 
@@ -91,6 +92,114 @@ def test_read_atcf_returns_stormtrack():
     assert track.basin == "Atlantic"
     assert track.center.shape[1] == 2
     assert track.wind_speeds is not None
+
+
+# ---------------------------------------------------------------------------
+# IBTrACS reader output types.
+#
+# read_ibtracs is the only reader backed by xarray, and it used to let xarray
+# types leak out: ``t`` stayed a DataArray and ``classification`` stayed bytes.
+# These are contract tests rather than snapshots, so they keep holding as the
+# fixture or the xarray version changes.
+# ---------------------------------------------------------------------------
+
+_IBTRACS_KWARGS = {"sid": "2008245N17323", "agency_pref": ["wmo", "usa"]}
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_ibtracs_reader_types():
+    """read_ibtracs returns plain NumPy/Python types, like every other reader."""
+    pytest.importorskip("xarray")
+    track = StormTrack.read_ibtracs(_storm_input_path("ibtracs"),
+                                    **_IBTRACS_KWARGS)
+
+    # Times: a datetime64 ndarray, not an xarray DataArray.  Indexing a
+    # DataArray yields 0-d DataArrays, which is what broke
+    # fill_rad_w_other_source.
+    assert isinstance(track.t, np.ndarray)
+    assert track.t.dtype == np.dtype("datetime64[s]")
+    assert isinstance(track.t[0], np.datetime64)
+
+    # time_offset is drawn from t, so it follows.
+    assert isinstance(track.time_offset, np.datetime64)
+
+    # Classification decoded from the netCDF's bytes, so it compares against
+    # ordinary string literals rather than b'TD'.
+    assert track.classification.dtype.kind == "U"
+    assert "TD" in track.classification
+    assert not any(str(value).startswith("b'") for value in track.classification)
+
+    assert track.event.dtype.kind == "U"
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_ibtracs_second_resolution_times():
+    """IBTrACS times land on whole seconds, not a nanosecond roundoff tail.
+
+    IBTrACS stores times that decode to values like
+    ``2008-09-01T06:00:00.000039936``.  Carried through to ``write_geoclaw``
+    those turn nominal hour offsets into ``-3.60000003e+03`` instead of
+    ``-3.60000000e+03``; the committed ``ibtracs_geoclaw.txt`` baseline has the
+    exact values, so truncating to seconds restores agreement with it.
+    """
+    pytest.importorskip("xarray")
+    track = StormTrack.read_ibtracs(_storm_input_path("ibtracs"),
+                                    **_IBTRACS_KWARGS)
+
+    offsets = (track.t - track.time_offset) / np.timedelta64(1, "s")
+    # Every IBTrACS observation is on a whole minute; no sub-second residue.
+    assert np.allclose(offsets % 60.0, 0.0, atol=0.0)
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_ibtracs_reader_no_future_warnings():
+    """read_ibtracs uses no deprecated xarray API.
+
+    ``Dataset.dims`` returning a mapping is deprecated and becomes a set of
+    dimension names; ``Dataset.sizes`` is the replacement.  Promoting the
+    warning to an error keeps this from silently rotting on the next xarray
+    release.
+    """
+    pytest.importorskip("xarray")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        # The reader legitimately warns about missing RMW/ROCI; that is not the
+        # class of warning under test here.
+        warnings.filterwarnings("ignore", category=UserWarning)
+        StormTrack.read_ibtracs(_storm_input_path("ibtracs"), **_IBTRACS_KWARGS)
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_fill_rad_accepts_scalar_or_zero_d_time():
+    """fill_rad_w_other_source accepts a scalar and a 0-d DataArray time alike.
+
+    Callers pass ``storm.t[n]``, so whichever of those a reader produces has to
+    work.  A 0-d DataArray used to raise
+    ``ValueError: Could not convert object to NumPy datetime``.
+    """
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("pandas")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        target = StormTrack.read_ibtracs(_storm_input_path("ibtracs"),
+                                         **_IBTRACS_KWARGS)
+        source = StormTrack.read_atcf(_storm_input_path("atcf"))
+
+    scalar_t = target.t[len(target.t) // 2]
+    from_scalar = fill_rad_w_other_source(scalar_t, target, source,
+                                          "max_wind_radius")
+
+    zero_d = xr.DataArray(scalar_t)
+    assert zero_d.ndim == 0
+    from_zero_d = fill_rad_w_other_source(zero_d, target, source,
+                                          "max_wind_radius")
+
+    assert np.isclose(from_scalar, from_zero_d)
 
 
 @pytest.mark.python

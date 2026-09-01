@@ -24,6 +24,17 @@ follow-up (geoclaw examples/tests + clawutil `met_data` + Sphinx docs) are all
 merged to `clawpack/master`. **Next up: S3** (track-reader harvest), then the
 **M1 parametric generator** — now set up as a tracked project, currently pinned.
 
+**Progress (2026-09-01):** **S3a** (IBTrACS reader type/API hygiene) is done — see
+below. It is the first of a short series driven by a downstream need to run a
+45-year North Atlantic historical ensemble (IBTrACS v4 + HURDAT2, 1980–2025) through
+GeoClaw, which surfaced that **the historical readers cannot currently produce a
+runnable storm file at all**: `read_hurdat`/`read_ibtracs` mark missing radii `-1`
+while `write_geoclaw` tests only `np.isnan`, so `fill_dict` never fires and `-1` is
+written verbatim (a regression against v5.9.0, whose writer checked `== -1`). That
+is the next item, as an S4 prerequisite; then multi-storm ingestion (**S5**, new —
+both archives ship one file per basin and `read_hurdat` is single-storm-only), then
+S3 proper and S4.
+
 ## Context
 
 The met-forcing refactor is merged to `clawpack/master`. The object model is now
@@ -119,9 +130,44 @@ Delivered on branch `met-deprefix-gridded`.
 
 - **S3. Harvest low-risk track-reader improvements** into `met/track.py`
   (do **not** adopt a parallel `CycloneDataset` object model): quadrant wind-radii
-  (`r34/r50/r64` × NE/SE/SW/NW), `Basin`/`StormStatus` enums + standardization
-  maps, and an IBTrACS netCDF path if the current reader is CSV-only. Port ideas,
-  re-verify against real files, keep `StormTrack` as the single home.
+  (`r34/r50/r64` × NE/SE/SW/NW), and `Basin`/`StormStatus` enums + standardization
+  maps. Port ideas, re-verify against real files, keep `StormTrack` as the single
+  home.
+  - *The original "…and an IBTrACS netCDF path if the current reader is CSV-only"
+    clause was **stale** and has been struck: `read_ibtracs` has always been an
+    xarray/netCDF reader. Confirmed against the real `IBTrACS.NA.v04r01.nc`
+    (2,298 storms; dims `storm` / `date_time` / `quadrant`), which does carry the
+    `quadrant` dimension this item needs — only the bundled
+    `tests/data/storm/ibtracs.nc` fixture is a stripped single-storm slice without
+    it, so offline coverage of quadrant radii will need a new fixture or a
+    `remote` test.*
+
+- **S3a. IBTrACS reader type/API hygiene — ✅ DONE (PR #NNN, verified against
+  `7ef7a816`).** Prerequisite for S4: the fill path could not run at all, because
+  `read_ibtracs` left `self.t` as an `xarray.DataArray`, so `storm.t[n]` was a 0-d
+  DataArray and `fill_rad_w_other_source`'s `interp` raised
+  `ValueError: Could not convert object to NumPy datetime`.
+  - `self.t` is now a `datetime64[s]` ndarray (matching every other reader),
+    `classification` is decoded from bytes (`b'TD'` → `'TD'`), `ds.dims.keys()` →
+    `ds.sizes` (xarray `FutureWarning`; `Dataset.dims` becomes a set of names), and
+    the storm-dimension squeeze is explicit so a single-observation storm no longer
+    has `date_time` collapsed along with it.
+  - Truncating to seconds also drops the sub-second roundoff IBTrACS decodes
+    (`…T06:00:00.000039936`). **This moved two rows of the written storm file back
+    into exact agreement with the committed `ibtracs_geoclaw.txt` baseline**
+    (`-3.60000003e+03` → `-3.60000000e+03` and `7.19999997e+03` → `7.20000000e+03`
+    at data rows 103 and 105); the v5.9.0-era golden holds the exact values, so the
+    roundoff was a post-v5.9.0 regression rather than the baseline being wrong.
+    Verification is that agreement plus four contract tests in
+    `tests/test_met_objects.py` — types, whole-second times, a read under
+    `FutureWarning`-as-error, and `fill_rad_w_other_source` accepting a scalar
+    *and* a 0-d DataArray. All four fail on `7ef7a816`.
+  - Only golden regenerated: `characterization/read_ibtracs.json`, which was
+    storing the *xarray repr string* for `t` (including `Size: 952B`, coords and
+    attrs) and `"b'TD'"` for `classification` — i.e. exactly the type leak being
+    fixed, and a snapshot that would have broken on any xarray repr change.
+  - `test_storm.py::test_storm_io[ibtracs]` stays `xfail`; the `-1`/NaN sentinel
+    bug that causes it is untouched here and is the subject of the next item.
 
 - **S4. Parametric geometry reconstruction (missing-data filling).** Restore and
   modernize the old code's "basic reconstruction from statistical and physical

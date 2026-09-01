@@ -507,10 +507,14 @@ class StormTrack(Track):
                 storm_match = (ds.name == storm_name.encode())
                 year_match = (ds.time.dt.year == year).any(dim='date_time')
                 match = storm_match & year_match
-            ds = ds.sel(storm=match).squeeze()
+            # Squeeze only the storm dimension: a bare squeeze() would also
+            # collapse date_time for a storm with a single observation.
+            ds = ds.sel(storm=match)
+            if ds.sizes.get('storm') == 1:
+                ds = ds.squeeze(dim='storm')
 
             # occurs if we have 0 or >1 matching storms
-            if 'storm' in ds.dims.keys():
+            if 'storm' in ds.sizes:
                 if ds.storm.shape[0] == 0:
                     raise ValueError('Storm/year not found in provided file')
                 else:
@@ -523,8 +527,8 @@ class StormTrack(Track):
 
                     # find storm with start date closest to provided
                     storm_ix = abs(start_times - start_date).argmin()
-                    ds = ds.isel(storm=storm_ix).squeeze()
-                    assert 'storm' not in ds.dims.keys()
+                    ds = ds.isel(storm=storm_ix)
+                    assert 'storm' not in ds.sizes
 
             # cut down dataset to only non-null times
             valid_t = ds.time.notnull()
@@ -605,8 +609,13 @@ class StormTrack(Track):
             self.name = ds.name.astype(str).item()
             self.ID = ds.sid.astype(str).item()
 
-            # convert datetime64 to datetime.datetime
-            self.t = ds.time
+            # Times as a plain datetime64 ndarray, matching every other reader.
+            # Leaving this as a DataArray leaks xarray into consumers -- indexing
+            # it yields 0-d DataArrays, which is what makes
+            # fill_rad_w_other_source's interp fail.  Truncating to seconds also
+            # drops the sub-second float roundoff IBTrACS carries in its times
+            # (e.g. ...T06:00:00.000039936).
+            self.t = ds.time.values.astype('datetime64[s]')
 
             # events
             self.event = ds.usa_record.values.astype(str)
@@ -614,13 +623,15 @@ class StormTrack(Track):
             # time offset
             if (self.event == 'L').any():
                 # if landfall, use last landfall
-                self.time_offset = np.array(self.t)[self.event == 'L'][-1]
+                self.time_offset = self.t[self.event == 'L'][-1]
             else:
                 # if no landfall, use last time of storm
                 self.time_offset = self.t[-1]
 
-            # Classification, note that this is not the category of the storm
-            self.classification = ds.usa_status.values
+            # Classification, note that this is not the category of the storm.
+            # Decode from the netCDF's bytes (b'TD') to str so it compares
+            # against ordinary string literals.
+            self.classification = ds.usa_status.values.astype(str)
             self.eye_location = np.array([ds.lon, ds.lat]).T
 
             # Intensity information - for now, including only common, basic intensity
@@ -1083,6 +1094,14 @@ def fill_rad_w_other_source(t, storm_targ, storm_fill, var, interp_kwargs={}):
     except ImportError as e:
         print("fill_rad_w_other_source currently requires xarray to work.")
         raise e
+
+    # Accept a 0-d DataArray for *t* as well as a scalar.  Callers commonly pass
+    # ``storm.t[n]``, and a reader that stores its times as a DataArray hands back
+    # a 0-d DataArray, which interp() below cannot convert to a datetime.
+    if hasattr(t, 'values'):
+        t = t.values
+    if isinstance(t, np.ndarray) and t.ndim == 0:
+        t = t.item()
 
     fill_da = xr.DataArray(getattr(storm_fill, var),
                            coords={'t': np.asarray(getattr(storm_fill, 't'))},
