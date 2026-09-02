@@ -801,3 +801,324 @@ def test_gridded_to_owi(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+# ---------------------------------------------------------------------------
+# Multi-storm archive ingestion
+#
+# Both HURDAT2 and IBTrACS ship one file per basin holding every storm on
+# record.  The `iter_*` generators and the `read_*` classmethods share a single
+# parser, so the load-bearing check is that the two paths produce identical
+# objects -- not two independent goldens that could drift apart.
+# ---------------------------------------------------------------------------
+
+def _parsed_state(track):
+    """Canonical text of a track's state, excluding provenance.
+
+    Compared as serialized text rather than as a dict, because the state
+    contains NaN and ``nan != nan`` makes dict equality fail spuriously -- the
+    same reason the characterization tests compare golden *text*.
+    ``file_paths`` is dropped: it records where the object came from, which
+    legitimately differs between a bulk walk and a single-storm read, while
+    everything else is the parsed track and must match exactly.
+    """
+    from test_storm_characterization import _storm_state, _dumps
+    state = _storm_state(track)
+    state.pop("file_paths", None)
+    return _dumps(state)
+
+
+def _two_storm_hurdat(tmp_path):
+    """A two-storm HURDAT2 file, relabeled from the bundled single-storm one."""
+    original = _storm_input_path("hurdat").read_text().rstrip("\n").split("\n")
+    header, records = original[0], original[1:]
+
+    # Re-frame with an accurate declared record count, then a second storm with
+    # a different id and name.
+    first = f"AL082008,              IKE,{len(records):>4},"
+    second = f"AL102008,             JOSE,{len(records):>4},"
+    path = tmp_path / "two_storms.txt"
+    path.write_text("\n".join([first] + records + [second] + records) + "\n")
+    assert header  # the bundled fixture really does start with a header
+    return path
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_hurdat_declared_record_count_is_enforced(tmp_path):
+    """A HURDAT2 header declares its record count; a mismatch must be caught.
+
+    This is the framing invariant the format hands us for free.  Without it the
+    single-storm reader walked into the *next* storm's header and fed
+    ``"AL092008"`` to ``np.datetime64``.
+    """
+    path = _two_storm_hurdat(tmp_path)
+    lines = path.read_text().split("\n")
+
+    # Truncate the first storm's declared count by one.
+    from clawpack.geoclaw.met.track import _hurdat_blocks
+    blocks = list(_hurdat_blocks(path))
+    assert len(blocks) == 2
+    assert all(len(records) == header["num_records"]
+               for header, records in blocks)
+    total = sum(header["num_records"] for header, _ in blocks)
+    data_lines = sum(1 for line in lines
+                     if line[:8].isdigit())
+    assert total == data_lines, "declared counts must sum to the data lines"
+
+    # A header claiming more records than follow is an error, not a silent read
+    # into the next storm.
+    lines[0] = lines[0].replace(f"{len(blocks[0][1]):>4},", "  99,")
+    bad = tmp_path / "bad_count.txt"
+    bad.write_text("\n".join(lines))
+    with pytest.raises(ValueError, match="declares"):
+        list(_hurdat_blocks(bad))
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_iter_hurdat_matches_read_hurdat(tmp_path):
+    """Bulk and single-storm HURDAT2 reads produce identical objects."""
+    from clawpack.geoclaw.met.track import iter_hurdat
+
+    path = _two_storm_hurdat(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tracks = list(iter_hurdat(path))
+        selected = StormTrack.read_hurdat(path, storm_id="AL102008")
+
+    assert [t.ID for t in tracks] == ["AL082008", "AL102008"]
+    assert [t.name for t in tracks] == ["IKE", "JOSE"]
+    assert _parsed_state(tracks[1]) == _parsed_state(selected)
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_read_hurdat_requires_a_selector_for_multi_storm_files(tmp_path):
+    """Ambiguity is an error naming the candidates, not an arbitrary pick."""
+    path = _two_storm_hurdat(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="2 storms"):
+            StormTrack.read_hurdat(path)
+        with pytest.raises(ValueError, match="No storm"):
+            StormTrack.read_hurdat(path, name="NOSUCHSTORM")
+        # A single-storm file still needs no selector.
+        single = StormTrack.read_hurdat(_storm_input_path("hurdat"))
+        assert single.ID == "AL082008"
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_iter_hurdat_filters(tmp_path):
+    """Filters combine, and years accepts an int or an iterable."""
+    from clawpack.geoclaw.met.track import iter_hurdat, catalog_hurdat
+
+    path = _two_storm_hurdat(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert len(list(iter_hurdat(path, names=["JOSE"]))) == 1
+        assert len(list(iter_hurdat(path, years=2008))) == 2
+        assert len(list(iter_hurdat(path, years=range(2000, 2005)))) == 0
+        assert len(list(iter_hurdat(path, basins="AL"))) == 2
+        assert len(list(iter_hurdat(path, basins="EP"))) == 0
+
+    catalog = catalog_hurdat(path)
+    assert list(catalog.storm_id) == ["AL082008", "AL102008"]
+    assert set(catalog.basin) == {"Atlantic"}
+    assert (catalog.t_start <= catalog.t_end).all()
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_iter_ibtracs_matches_read_ibtracs(tmp_path):
+    """Bulk and single-storm IBTrACS reads produce identical objects."""
+    xr = pytest.importorskip("xarray")
+    from clawpack.geoclaw.met.track import iter_ibtracs
+
+    path = _storm_input_path("ibtracs")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bulk = list(iter_ibtracs(path, agency_pref=["wmo", "usa"]))
+        single = StormTrack.read_ibtracs(path, **_IBTRACS_KWARGS)
+
+    assert len(bulk) == 1
+    assert _parsed_state(bulk[0]) == _parsed_state(single)
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_iter_ibtracs_over_multiple_storms(tmp_path):
+    """Two storms in one file are read independently, with no cross-contamination.
+
+    The bundled fixture is a stripped single-storm slice, so a second storm is
+    synthesized by relabeling a copy.  Note this cannot exercise real
+    heterogeneity (differing agencies, basins, valid ranges) -- only the
+    remote-marked test over a real basin file does that.
+    """
+    xr = pytest.importorskip("xarray")
+    from clawpack.geoclaw.met.track import iter_ibtracs, catalog_ibtracs
+
+    with xr.open_dataset(_storm_input_path("ibtracs")) as ds:
+        second = ds.copy(deep=True)
+        second["sid"] = second.sid.copy(data=[b"2008245N17999"])
+        second["name"] = second.name.copy(data=[b"NOTIKE"])
+        combined = xr.concat([ds, second], dim="storm")
+        path = tmp_path / "two_storms.nc"
+        combined.to_netcdf(path)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tracks = list(iter_ibtracs(path, agency_pref=["wmo", "usa"]))
+
+    assert [t.ID for t in tracks] == ["2008245N17323", "2008245N17999"]
+    assert [t.name for t in tracks] == ["IKE", "NOTIKE"]
+    # Each track's times stay inside its own record -- no bleed between storms.
+    for track in tracks:
+        assert len(track.t) == len(tracks[0].t)
+        assert np.array_equal(track.t, tracks[0].t)
+
+    # Selecting by sid picks exactly one of them.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        agencies = {"agency_pref": ["wmo", "usa"]}
+        assert len(list(iter_ibtracs(path, sids=["2008245N17999"],
+                                     **agencies))) == 1
+        assert len(list(iter_ibtracs(path, names=["IKE"], **agencies))) == 1
+
+    catalog = catalog_ibtracs(path)
+    assert list(catalog.sid) == ["2008245N17323", "2008245N17999"]
+    assert (catalog.num_records > 0).all()
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_iter_ibtracs_skip_invalid(tmp_path):
+    """A storm with no coincident wind and pressure is skipped, not fatal.
+
+    Over a whole basin these exist (57 of 741 for the North Atlantic
+    1980-2025), so one of them must not abort the sweep.
+    """
+    xr = pytest.importorskip("xarray")
+    from clawpack.geoclaw.met.track import iter_ibtracs
+
+    with xr.open_dataset(_storm_input_path("ibtracs")) as ds:
+        broken = ds.copy(deep=True)
+        broken["sid"] = broken.sid.copy(data=[b"2008245N17999"])
+        for name in list(broken.data_vars):
+            if name.endswith("_wind"):
+                broken[name] = broken[name] * np.nan
+        combined = xr.concat([ds, broken], dim="storm")
+        path = tmp_path / "one_broken.nc"
+        combined.to_netcdf(path)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tracks = list(iter_ibtracs(path, agency_pref=["wmo", "usa"]))
+    assert [t.ID for t in tracks] == ["2008245N17323"]
+    assert any("Skipped 1" in str(w.message) for w in caught)
+
+    with pytest.raises((ValueError, RuntimeError)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            list(iter_ibtracs(path, agency_pref=["wmo", "usa"],
+                              skip_invalid=False))
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_iter_atcf_matches_make_multi_structure(tmp_path):
+    """The in-memory ATCF walk agrees with the split-to-disk one.
+
+    ``make_multi_structure`` is now a thin wrapper over ``iter_atcf``; this
+    pins that they stay equivalent, and that ``iter_atcf`` leaves nothing behind.
+    """
+    pytest.importorskip("pandas")
+    from clawpack.geoclaw.met.tools import iter_atcf, make_multi_structure
+
+    path = _storm_input_path("atcf")
+    before = set(Path.cwd().iterdir())
+    walked = list(iter_atcf(path))
+    assert set(Path.cwd().iterdir()) == before, "iter_atcf must not write files"
+
+    split = make_multi_structure(path, output_dir=str(tmp_path / "clipped"))
+    assert [storm_id for storm_id, _ in walked] == list(split.keys())
+    for storm_id, storm in walked:
+        assert _parsed_state(storm) == _parsed_state(split[storm_id])
+
+
+@pytest.mark.remote
+@pytest.mark.storm
+@pytest.mark.slow
+def test_full_basin_sweep():
+    """End-to-end over the real archives; the only test of real heterogeneity.
+
+    The bundled fixtures are a single-storm HURDAT2 excerpt and a stripped
+    single-storm IBTrACS slice, so nothing offline exercises differing agencies,
+    basin crossings, or the ~8% of storms with no coincident wind and pressure.
+    Requires the archives on disk; set ``GEOCLAW_TRACK_ARCHIVES`` to the
+    directory holding ``IBTrACS.NA.v04r01.nc`` and a HURDAT2 Atlantic text file.
+    """
+    import os
+    from clawpack.geoclaw.met.track import (iter_hurdat, iter_ibtracs,
+                                            catalog_hurdat, catalog_ibtracs,
+                                            _hurdat_blocks)
+
+    archives = os.environ.get("GEOCLAW_TRACK_ARCHIVES")
+    if archives is None:
+        pytest.skip("set GEOCLAW_TRACK_ARCHIVES to the archive directory")
+    hurdat_path = Path(archives) / "hurdat2_atlantic.txt"
+    ibtracs_path = Path(archives) / "IBTrACS.NA.v04r01.nc"
+    if not hurdat_path.exists() or not ibtracs_path.exists():
+        pytest.skip(f"archives not found under {archives}")
+
+    # --- HURDAT2: record-count conservation over the whole file -------------
+    blocks = list(_hurdat_blocks(hurdat_path))
+    declared = sum(header["num_records"] for header, _ in blocks)
+    parsed = sum(len(records) for _, records in blocks)
+    assert declared == parsed, "declared record counts must match what parsed"
+
+    with open(hurdat_path) as handle:
+        data_lines = sum(1 for line in handle if line[:8].isdigit())
+    assert declared == data_lines, "and must account for every data line"
+
+    catalog = catalog_hurdat(hurdat_path)
+    assert len(catalog) == len(blocks)
+    assert catalog.num_records.sum() == declared
+
+    # --- IBTrACS: catalog agrees with the sweep, no cross-contamination -----
+    years = range(1980, 2026)
+    index = catalog_ibtracs(ibtracs_path, basin="NA", years=years)
+    assert len(index) > 500, "the North Atlantic 1980-2025 has ~740 storms"
+    spans = {row.sid: (row.t_start, row.t_end) for row in index.itertuples()}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tracks = list(iter_ibtracs(ibtracs_path, basin="NA", years=years))
+
+    assert 0 < len(tracks) <= len(index)
+    for track in tracks:
+        assert track.t.dtype == np.dtype("datetime64[s]")
+        # Times are monotone within a storm...
+        assert (np.diff(track.t) >= np.timedelta64(0, "s")).all()
+        # ...and stay inside that storm's own span from the catalog, which is
+        # the check that would catch one storm's records bleeding into another.
+        t_start, t_end = spans[track.ID]
+        assert track.t[0] >= t_start
+        assert track.t[-1] <= t_end
+        assert track.basin == "NA"
+
+    # --- Cross-archive: the same storm agrees between the two archives ------
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ike_hurdat = next(iter_hurdat(hurdat_path, names=["IKE"], years=2008))
+        ike_ibtracs = next(iter_ibtracs(ibtracs_path, names=["IKE"],
+                                        years=2008))
+
+    # Both archives are NHC best track for the Atlantic, so coincident times
+    # must carry the same eye position to best-track precision (0.1 deg).
+    shared, h_index, i_index = np.intersect1d(
+        ike_hurdat.t, ike_ibtracs.t, return_indices=True)
+    assert len(shared) > 20, "the two archives should share most of Ike's track"
+    assert np.allclose(ike_hurdat.eye_location[h_index],
+                       ike_ibtracs.eye_location[i_index], atol=0.11)

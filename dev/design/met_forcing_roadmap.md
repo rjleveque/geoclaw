@@ -32,9 +32,12 @@ runnable storm file at all**: `read_hurdat`/`read_ibtracs` mark missing radii `-
 while `write_geoclaw` tests only `np.isnan`, so `fill_dict` never fires and `-1` is
 written verbatim (a regression against v5.9.0, whose writer checked `== -1`).
 **That is now also done** (S4-prerequisite, below): the missing-value contract is
-unified on NaN and `test_storm_io[ibtracs]` is no longer `xfail`. Next is
-multi-storm ingestion (**S5**, new — both archives ship one file per basin and
-`read_hurdat` is single-storm-only), then S3 proper and S4.
+unified on NaN and `test_storm_io[ibtracs]` is no longer `xfail`. **Multi-storm
+ingestion is also done** (**S5**, new — `iter_hurdat` / `iter_ibtracs` /
+`iter_atcf` plus `catalog_*` indices). Next is **S3 proper** (quadrant radii,
+`Basin`/`StormStatus` enums, the remaining `<U1` truncations), then **S4**
+(`met/reconstruction.py` — needed because RMW is observed at only 55% of North
+Atlantic 1980-2025 track points and never by HURDAT2).
 
 ## Context
 
@@ -267,6 +270,73 @@ Delivered on branch `met-deprefix-gridded`.
   harvested quadrant radii / basin) and as a **companion feeding M1** (the
   generator consumes complete parameter sets). Reference note (TC-radius section):
   *Rework TC Geometry Estimates* (vault project note).
+
+- **S5. Multi-storm archive ingestion — ✅ DONE (PR #NNN, verified against
+  `25ec8abc`).** HURDAT2 and IBTrACS both distribute *one file per basin holding
+  every storm on record* (2,004 Atlantic storms / 55,605 records; 2,298 IBTrACS
+  NA storms), so driving an ensemble means walking a file, not opening one per
+  storm. Previously `read_hurdat` assumed a single storm per file and **crashed**
+  on a real archive — it read the next storm's header as a data line and fed
+  `"AL092008"` to `np.datetime64` — while `read_ibtracs` re-scanned the file for
+  every storm.
+  - **API: module-level generators, no collection class.** `iter_hurdat`,
+    `iter_ibtracs` and `iter_atcf` yield `StormTrack`s; `catalog_hurdat` /
+    `catalog_ibtracs` return a `pandas.DataFrame` index (id, name, season, basin,
+    record count, time span, peak wind) so a driver can decide what to run before
+    running it. A DataFrame index is what an ensemble driver actually needs; a
+    `TrackCollection` would have been the parallel object model this roadmap
+    warns against. **S5/M2 boundary:** M2 (`to_xarray()` / CF track I/O) is
+    *serialization of our tracks*; S5 is *ingestion of foreign archives*. They
+    compose — once M2 lands the multi-storm container is
+    `xr.concat(t.to_xarray() for t in iter_*(...))` — and M2 need not re-solve
+    ingestion.
+  - **One parser per format.** `read_hurdat` gained `storm_id` / `name` / `year`
+    selectors and is now built on the same `_hurdat_blocks` framing as
+    `iter_hurdat`; `read_ibtracs` keeps its signature and is built on the same
+    `_select_ibtracs_storm` + `_track_from_ibtracs` as `iter_ibtracs`;
+    `make_multi_structure` is a thin wrapper over `iter_atcf` (which stages
+    through a temp dir instead of littering the cwd) and its test passes
+    unmodified. The verification is therefore *path equivalence* — bulk and
+    single-storm reads produce identical objects — rather than two goldens that
+    could drift.
+  - **Record-count conservation** is the primary HURDAT2 integrity check: each
+    header declares how many records follow, so declared totals must equal what
+    parsed *and* the number of data lines in the file. Verified over the whole
+    Atlantic archive (55,605 both ways). A header claiming more records than
+    follow now raises with the line number instead of absorbing the next storm.
+  - `iter_ibtracs(skip_invalid=True)` is load-bearing, not a convenience:
+    **57 of 741** North Atlantic 1980-2025 storms have no time at which both a
+    wind and a pressure were reported (`NoDataError`), and one of them must not
+    abort a basin sweep. Measured throughput: 684 tracks in 8.8 s (13 ms/storm);
+    `catalog_ibtracs` over the same selection takes 0.2 s.
+  - Reader-correctness fixes that were **inseparable from rewriting the HURDAT2
+    parser**, and so landed here rather than in S3: `ID` held the header's
+    *record count* (`"06"`) and now holds the ATCF-style id (`"AL082008"`) — the
+    count is what frames the block; `basin` was the raw `"AL"` where `read_atcf`
+    gives `"Atlantic"`; and `classification`/`event` were `<U1`-truncated
+    (`"LO"` → `"L"`, colliding with the landfall event code) because the arrays
+    are allocated in the rewritten parser. One golden regenerated:
+    `characterization/read_hurdat.json`, a three-field diff. **S3 retains** the
+    quadrant radii, the `Basin`/`StormStatus` enums, the same `<U1` fix for
+    `read_jma`/`read_tcvitals`, and the `plot` swath masking.
+  - Also shared rather than duplicated: `_IBTRACS_AGENCY_PREF`, previously a
+    mutable default argument on `read_ibtracs`, so the reader and the iterator
+    cannot drift.
+  - **Coverage gap stated plainly:** the bundled fixtures are a single-storm
+    HURDAT2 excerpt and a stripped single-storm IBTrACS slice (no `quadrant`
+    dim, no `season`, only `wmo_*`/`usa_*` agencies). Offline tests synthesize
+    multi-storm files by relabeling those, which cannot exercise differing
+    agencies, basin crossings or real invalid storms. The only test of real
+    heterogeneity is `test_full_basin_sweep`
+    (`@pytest.mark.remote @pytest.mark.slow`, driven by
+    `GEOCLAW_TRACK_ARCHIVES`), which also cross-checks HURDAT2 against IBTrACS
+    for Ike — the same storm from two independent archives through two
+    independent readers agrees on eye position to 0.11 deg. Either commit a small
+    real multi-storm NA slice, or accept that offline coverage is structural
+    only.
+  - *Note for whoever writes NaN-bearing test comparisons:* `_storm_state`
+    dictionaries cannot be compared with `==`, because `nan != nan`. Compare
+    `_dumps(...)` text, as the characterization tests do.
 
 ### MEDIUM TERM
 

@@ -1,6 +1,6 @@
 {
-  "ID": "06",
-  "basin": "AL",
+  "ID": "AL082008",
+  "basin": "Atlantic",
   "central_pressure": [
     100600.0,
     100300.0,
@@ -10,12 +10,12 @@
     100200.0
   ],
   "classification": [
-    "L",
-    "L",
-    "L",
-    "L",
-    "L",
-    "L"
+    "LO",
+    "LO",
+    "LO",
+    "LO",
+    "LO",
+    "LO"
   ],
   "crop_extent": null,
   "event": [
