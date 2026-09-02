@@ -100,6 +100,42 @@ class NoDataError(ValueError):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Missing-data contract
+#
+# In memory, ``np.nan`` is the *only* marker for a missing value, in every reader
+# and every field.  Archive-specific sentinels are normalized here, at the reader
+# boundary, so nothing downstream has to know which format a track came from.
+# ``read_atcf`` has always worked this way; hurdat/jma/ibtracs used ``-1``, which
+# silently defeated ``write_geoclaw``'s NaN-based fill and skip logic.
+#
+# Note that zero is *not* missing.  HURDAT2 reports genuinely-zero quadrant wind
+# radii for weak systems (no 34-kt winds exist to have a radius), which is real
+# data and distinct from its ``-999`` "unknown".
+# ---------------------------------------------------------------------------
+
+# AOML HURDAT2 uses -99 for unknown wind and -999 for unknown pressure/radii.
+HURDAT_SENTINELS = (-99.0, -999.0, -9999.0)
+
+# NCEP tcvitals uses -99/-999 in the same role.
+TCVITALS_SENTINELS = (-99.0, -999.0)
+
+
+def _sentinel_to_nan(value, sentinels):
+    r"""Replace archive missing-value *sentinels* with ``np.nan``.
+
+    Works on a scalar or an array.  Applied *before* any unit conversion, so a
+    sentinel is never scaled into a plausible-looking physical value -- e.g.
+    ``units.convert(-999, 'mbar', 'Pa')`` would otherwise yield -99900.0 Pa.
+    """
+    array = np.asarray(value, dtype=float)
+    missing = np.zeros(array.shape, dtype=bool)
+    for sentinel in sentinels:
+        missing |= (array == sentinel)
+    result = np.where(missing, np.nan, array)
+    return float(result) if result.ndim == 0 else result
+
+
 class _Meta(object):
     r"""Shared meteorological-forcing bookkeeping.
 
@@ -417,14 +453,20 @@ class StormTrack(Track):
                 self.eye_location[i, 0] = -float(data[5][0:-1])
 
             # Intensity information - radii are not included directly in this
-            # format and instead radii of winds above a threshold are included
+            # format and instead radii of winds above a threshold are included.
+            # HURDAT2 marks unknown wind as -99 and unknown pressure as -999;
+            # normalize before converting units, or the sentinel is scaled into a
+            # physical-looking value (-999 mbar -> -99900 Pa).
             self.max_wind_speed[i] = units.convert(
-                float(data[6]), 'knots', 'm/s')
+                _sentinel_to_nan(data[6], HURDAT_SENTINELS), 'knots', 'm/s')
             self.central_pressure[i] = units.convert(
-                float(data[7]), 'mbar', 'Pa')
-            warnings.warn(missing_data_warning_str)
-            self.max_wind_radius[i] = -1
-            self.storm_radius[i] = -1
+                _sentinel_to_nan(data[7], HURDAT_SENTINELS), 'mbar', 'Pa')
+            self.max_wind_radius[i] = np.nan
+            self.storm_radius[i] = np.nan
+
+        # HURDAT2 never supplies RMW or ROCI, so warn once for the file rather
+        # than once per track point.
+        warnings.warn(missing_data_warning_str)
 
         self.file_paths.append(path)
         self.file_format = "hurdat"
@@ -637,17 +679,26 @@ class StormTrack(Track):
             # Intensity information - for now, including only common, basic intensity
             # info.
             # TODO: add more detailed info for storms that have it
+            #
+            # xarray already carries missing values as NaN, which is the
+            # in-memory contract, so these are converted straight through; the
+            # former .where(..., -1) wrappers replaced NaN with a sentinel that
+            # write_geoclaw's NaN-based fill/skip logic could not see.
             self.max_wind_speed = units.convert(
-                pref_vals['wind'], 'knots', 'm/s').where(pref_vals['wind'].notnull(), -1).values
-            self.central_pressure = units.convert(pref_vals['pres'], 'mbar', 'Pa').where(
-                pref_vals['pres'].notnull(), -1).values
-            self.max_wind_radius = units.convert(pref_vals['rmw'], 'nmi', 'm').where(
-                pref_vals['rmw'].notnull(), -1).values
-            self.storm_radius = units.convert(pref_vals['roci'], 'nmi', 'm').where(
-                pref_vals['roci'].notnull(), -1).values
+                pref_vals['wind'], 'knots', 'm/s').values
+            self.central_pressure = units.convert(
+                pref_vals['pres'], 'mbar', 'Pa').values
+            self.max_wind_radius = units.convert(
+                pref_vals['rmw'], 'nmi', 'm').values
+            self.storm_radius = units.convert(
+                pref_vals['roci'], 'nmi', 'm').values
 
-            # warn if you have missing vals for RMW or ROCI
-            if (self.max_wind_radius.max()) == -1 or (self.storm_radius.max() == -1):
+            # warn if you have any missing vals for RMW or ROCI.  Note this is
+            # deliberately `.any()`: the old `.max() == -1` test only fired when
+            # *every* value was missing, so a partially-observed track warned
+            # nothing and then silently lost rows at write time.
+            if (np.isnan(self.max_wind_radius).any()
+                    or np.isnan(self.storm_radius).any()):
                 warnings.warn(missing_data_warning_str)
 
         self.file_paths.append(path)
@@ -725,9 +776,15 @@ class StormTrack(Track):
                 float(data[5]), 'hPa', 'Pa')
             self.max_wind_speed[i] = units.convert(
                 float(data[6]), 'knots', 'm/s')
-            warnings.warn(missing_data_warning_str)
-            self.max_wind_radius[i] = -1
-            self.storm_radius[i] = -1
+            # Note: JMA's own missing-value convention for the numeric fields is
+            # not documented in the sample data available here, so pressure and
+            # wind are deliberately left unnormalized; only the radii, which the
+            # format simply does not carry, are marked missing.
+            self.max_wind_radius[i] = np.nan
+            self.storm_radius[i] = np.nan
+
+        # The format does not carry RMW or ROCI; warn once per file.
+        warnings.warn(missing_data_warning_str)
 
         self.file_paths.append(path)
         self.file_format = "jma"
@@ -811,12 +868,17 @@ class StormTrack(Track):
             else:
                 self.eye_location[i, 0] = -float(data[6][0:-1])/10.0
 
-            # Intensity Information
-            self.max_wind_speed[i] = float(data[12])
+            # Intensity Information.  tcvitals marks unknown fields -99/-999;
+            # normalize before unit conversion so a sentinel is never scaled
+            # into a physical-looking value.
+            self.max_wind_speed[i] = _sentinel_to_nan(data[12],
+                                                      TCVITALS_SENTINELS)
             self.central_pressure[i] = units.convert(
-                float(data[9]), 'mbar', 'Pa')
-            self.max_wind_radius[i] = units.convert(float(data[13]), 'km', 'm')
-            self.storm_radius[i] = units.convert(float(data[11]), 'km', 'm')
+                _sentinel_to_nan(data[9], TCVITALS_SENTINELS), 'mbar', 'Pa')
+            self.max_wind_radius[i] = units.convert(
+                _sentinel_to_nan(data[13], TCVITALS_SENTINELS), 'km', 'm')
+            self.storm_radius[i] = units.convert(
+                _sentinel_to_nan(data[11], TCVITALS_SENTINELS), 'km', 'm')
 
         self.file_paths.append(path)
         self.file_format = "tcvitals"
@@ -1052,7 +1114,7 @@ def fill_rad_w_other_source(t, storm_targ, storm_fill, var, interp_kwargs={}):
     Thus, it first attempts to interpolate the variable in *storm_fill*
     to the desired timestep. If that is missing, it tries to interpolate
     the non-missing values of the variable in *storm_targ*. If that
-    also fails, it simply returns -1. The proper usage of this
+    also fails, it returns ``np.nan``. The proper usage of this
     function is to wrap it such that you can pass a function
     with (*t*, *storm*) arguments to *max_wind_radius_fill* or
     *storm_radius_fill* when calling *write_geoclaw*.
@@ -1069,8 +1131,9 @@ def fill_rad_w_other_source(t, storm_targ, storm_fill, var, interp_kwargs={}):
        interpolator.
 
     :Returns:
-     - (float) value to use to fill this time point in *storm_targ*. -1
-       if still missing after using *storm_fill* to fill.
+     - (float) value to use to fill this time point in *storm_targ*.
+       ``np.nan`` if still missing after using *storm_fill* to fill, so a
+       failed fill is skipped by ``write_geoclaw`` rather than written out.
 
     :Examples:
 
@@ -1139,5 +1202,8 @@ def fill_rad_w_other_source(t, storm_targ, storm_fill, var, interp_kwargs={}):
         if not np.isnan(targ_interp):
             return targ_interp
 
-    # if nothing worked, return the missing value (-1)
-    return -1
+    # If nothing worked, report missing.  NaN rather than -1 so write_geoclaw
+    # re-checks the fill's return and skips the row instead of emitting a
+    # negative radius that GeoClaw cannot run.  The `> 0` masks above are kept:
+    # for a radius that is the physically right predicate, and NaN > 0 is False.
+    return np.nan

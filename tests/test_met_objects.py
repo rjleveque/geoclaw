@@ -30,7 +30,8 @@ from clawpack.geoclaw.met.gridded import GriddedMetForcing
 
 # ``tests/`` has no package __init__; make the sibling helpers importable.
 sys.path.insert(0, str(Path(__file__).parent))
-from test_storm import _storm_input_path, _storm_check_path  # noqa: E402
+from test_storm import (_storm_input_path, _storm_check_path,  # noqa: E402
+                        _make_storm_from_format)
 from test_storm_characterization import _descriptor_head, golden_dir  # noqa: E402
 
 
@@ -219,6 +220,204 @@ def test_read_data_returns_gridded(tmp_path):
     assert read.x_shift == 1.25
     assert read.y_shift == -0.5
     assert len(read.file_paths) == 4
+
+
+# ---------------------------------------------------------------------------
+# Missing-data contract
+#
+# np.nan is the in-memory marker in every reader; write_geoclaw additionally
+# tolerates a negative for callers still on the v5.9.0 -1 convention; zero is
+# never missing.  These lock all three halves of that contract.
+# ---------------------------------------------------------------------------
+
+def _synthetic_track(**overrides):
+    """A minimal four-point ParametricMetForcing for writer tests."""
+    n = 4
+    forcing = ParametricMetForcing()
+    forcing.t = np.array(["2020-01-01T00", "2020-01-01T06",
+                          "2020-01-01T12", "2020-01-01T18"],
+                         dtype="datetime64[s]")
+    forcing.time_offset = forcing.t[0]
+    forcing.eye_location = np.column_stack([np.linspace(-80.0, -83.0, n),
+                                            np.linspace(25.0, 28.0, n)])
+    forcing.max_wind_speed = np.full(n, 40.0)
+    forcing.central_pressure = np.full(n, 98000.0)
+    forcing.max_wind_radius = np.full(n, 40e3)
+    forcing.storm_radius = np.full(n, 300e3)
+    for name, value in overrides.items():
+        setattr(forcing, name, value)
+    return forcing
+
+
+@pytest.mark.python
+@pytest.mark.storm
+@pytest.mark.parametrize("field", ["max_wind_speed", "central_pressure",
+                                   "max_wind_radius", "storm_radius"])
+def test_missing_marker_equivalence(tmp_path, field):
+    """A NaN-marked and a -1-marked storm write byte-identical files.
+
+    The readers now emit NaN, but objects built by hand and community fill
+    functions may still use -1.  Both must reach the same fill/skip branch.
+    """
+    nan_values = np.full(4, np.nan)
+    sentinel_values = np.full(4, -1.0)
+
+    nan_path = tmp_path / "nan.storm"
+    sentinel_path = tmp_path / "sentinel.storm"
+
+    _synthetic_track(**{field: nan_values}).write_geoclaw(nan_path)
+    with warnings.catch_warnings():
+        # The -1 path warns that the convention is deprecated; that is the
+        # documented behavior, not a failure.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        _synthetic_track(**{field: sentinel_values}).write_geoclaw(
+            sentinel_path)
+
+    assert nan_path.read_bytes() == sentinel_path.read_bytes()
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_failed_fill_is_skipped_not_written(tmp_path):
+    """A fill that cannot produce a value leaves the row skipped.
+
+    Returning NaN or -1 from a fill used to be written into the file verbatim,
+    producing a storm file GeoClaw cannot run.
+    """
+    for sentinel in (np.nan, -1.0):
+        path = tmp_path / f"fill_{sentinel}.storm"
+        forcing = _synthetic_track(max_wind_radius=np.full(4, np.nan))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            forcing.write_geoclaw(
+                path, fill_dict={"max_wind_radius": lambda t, s: sentinel})
+        # Header line is the cast count; every row should have been skipped.
+        assert path.read_text().splitlines()[0].strip() == "0"
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_zero_is_not_missing(tmp_path):
+    """Zero is real data, not a missing marker.
+
+    HURDAT2 reports genuinely-zero quadrant wind radii for weak systems.  A
+    'treat <= 0 as missing' rule would silently reinterpret those.
+    """
+    path = tmp_path / "zero.storm"
+    forcing = _synthetic_track(max_wind_speed=np.zeros(4))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # No fill supplied: if zero were treated as missing every row would be
+        # skipped and this would be a zero-cast file.
+        forcing.write_geoclaw(path)
+
+    lines = path.read_text().splitlines()
+    assert lines[0].strip() == "4"
+    assert float(lines[3].split()[3]) == 0.0
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_write_geoclaw_does_not_mutate_storm(tmp_path):
+    """Writing twice with different fills honors the second fill.
+
+    Fills used to be written back onto the storm object, so the second write saw
+    a storm that was no longer missing and silently reused the first fill.
+    """
+    forcing = _synthetic_track(max_wind_radius=np.full(4, np.nan))
+
+    first = tmp_path / "first.storm"
+    second = tmp_path / "second.storm"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        forcing.write_geoclaw(
+            first, fill_dict={"max_wind_radius": lambda t, s: 20e3})
+        forcing.write_geoclaw(
+            second, fill_dict={"max_wind_radius": lambda t, s: 60e3})
+
+    assert float(first.read_text().splitlines()[3].split()[4]) == 20e3
+    assert float(second.read_text().splitlines()[3].split()[4]) == 60e3
+    # And the storm itself is untouched.
+    assert np.all(np.isnan(forcing.max_wind_radius))
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_fill_dict_storm_radius_not_clobbered(tmp_path):
+    """A caller-supplied storm_radius fill beats the built-in 500 km default.
+
+    The default was applied with dict.update() *after* copying the caller's
+    fill_dict, so a caller-supplied storm_radius fill was silently discarded.
+    """
+    path = tmp_path / "roci.storm"
+    forcing = _synthetic_track(storm_radius=np.full(4, np.nan))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        forcing.write_geoclaw(
+            path, fill_dict={"storm_radius": lambda t, s: 250e3})
+
+    assert float(path.read_text().splitlines()[3].split()[6]) == 250e3
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_hurdat_sentinels_become_nan(tmp_path):
+    """HURDAT2 -99 wind / -999 pressure become NaN, not scaled sentinels.
+
+    Converting units before normalizing turned -999 mbar into -99900.0 Pa, a
+    value that looks physical enough to be written out.
+    """
+    header = "AL011980,          UNNAMED,      2,\n"
+    rows = ("19800101, 0000,  , TD, 25.0N,  80.0W, -99, -999,"
+            + " -999," * 11 + " -999,\n"
+            "19800101, 0600,  , TD, 25.5N,  80.5W,  35, 1005,"
+            + " -999," * 11 + " -999,\n")
+    path = tmp_path / "sentinel_hurdat.txt"
+    path.write_text(header + rows)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        track = StormTrack.read_hurdat(path)
+
+    assert np.isnan(track.max_wind_speed[0])
+    assert np.isnan(track.central_pressure[0])
+    # The valid second row is untouched and correctly converted.
+    assert np.isclose(track.central_pressure[1], 100500.0)
+    assert not np.isnan(track.max_wind_speed[1])
+
+
+@pytest.mark.python
+@pytest.mark.storm
+@pytest.mark.parametrize("file_format", ["atcf", "tcvitals", "ibtracs"])
+def test_written_radii_are_positive(tmp_path, file_format):
+    """Every storm file written from a bundled input is runnable.
+
+    A non-positive storm_radius zeros the forcing through the spatial ramp and a
+    non-positive max_wind_radius divides by zero in the Holland profiles, so a
+    file with either is not a valid GeoClaw input.  hurdat and jma are excluded
+    until met.reconstruction supplies real RMW/ROCI estimators; their current
+    baselines use placeholder zeros.
+    """
+    if file_format == "ibtracs":
+        pytest.importorskip("xarray")
+    pytest.importorskip("pandas")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        test_storm, fill_mwr, fill_rad = _make_storm_from_format(file_format)
+        write_kwargs = {}
+        if fill_mwr is not None:
+            write_kwargs["max_wind_radius_fill"] = fill_mwr
+        if fill_rad is not None:
+            write_kwargs["storm_radius_fill"] = fill_rad
+        path = tmp_path / f"{file_format}.storm"
+        test_storm.write(path, file_format="geoclaw", **write_kwargs)
+
+    values = np.loadtxt(path, skiprows=3)
+    assert values.shape[0] > 0
+    assert np.all(np.isfinite(values))
+    assert np.all(values[:, 4] > 0.0), "max_wind_radius must be positive"
+    assert np.all(values[:, 6] > 0.0), "storm_radius must be positive"
 
 
 # ---------------------------------------------------------------------------
