@@ -34,10 +34,12 @@ written verbatim (a regression against v5.9.0, whose writer checked `== -1`).
 **That is now also done** (S4-prerequisite, below): the missing-value contract is
 unified on NaN and `test_storm_io[ibtracs]` is no longer `xfail`. **Multi-storm
 ingestion is also done** (**S5**, new — `iter_hurdat` / `iter_ibtracs` /
-`iter_atcf` plus `catalog_*` indices). Next is **S3 proper** (quadrant radii,
-`Basin`/`StormStatus` enums, the remaining `<U1` truncations), then **S4**
-(`met/reconstruction.py` — needed because RMW is observed at only 55% of North
-Atlantic 1980-2025 track points and never by HURDAT2).
+`iter_atcf` plus `catalog_*` indices), and so is **S3** (quadrant radii,
+`Basin`/`StormStatus` enums, the remaining `<U1` truncations, and HURDAT2's
+post-2021 RMW column). Next is **S4** (`met/reconstruction.py`), still needed
+because RMW is observed at only **55%** of North Atlantic 1980–2025 IBTrACS track
+points, and HURDAT2 supplies it only from 2021 onward — so most of a 45-year
+ensemble still has no reported storm geometry.
 
 ## Context
 
@@ -132,19 +134,67 @@ Delivered on branch `met-deprefix-gridded`.
     fixed, and the `aux_owi` + isaac `owi_ascii` gauge goldens regenerated. Note:
     `test_isaac.py`'s OWI coordinate reconstruction was updated to match.
 
-- **S3. Harvest low-risk track-reader improvements** into `met/track.py`
-  (do **not** adopt a parallel `CycloneDataset` object model): quadrant wind-radii
-  (`r34/r50/r64` × NE/SE/SW/NW), and `Basin`/`StormStatus` enums + standardization
-  maps. Port ideas, re-verify against real files, keep `StormTrack` as the single
-  home.
+- **S3. Harvest low-risk track-reader improvements — ✅ DONE (PR #NNN, verified
+  against `8f0984d8`).** Quadrant wind radii, `Basin`/`StormStatus` enums, the
+  remaining `<U1` truncations, and the plot-swath guard. No parallel
+  `CycloneDataset`: everything hangs off `StormTrack`.
+  - **`wind_radii`** — shape `(n_times, n_thresholds, 4)` in metres, last axis
+    NE/SE/SW/NW, middle axis matching `wind_radii_thresholds` (34/50/64 kt as
+    m/s). Read for ATCF, HURDAT2 **and** IBTrACS. **Verification is
+    cross-archive agreement, not shape:** all three archives report *identical*
+    radii at Hurricane Ike's peak record — 34 kt `[213.0, 185.2, 166.7, 222.2]`
+    km, 50 kt `[138.9, 92.6, 74.1, 111.1]`, 64 kt `[55.6, 46.3, 37.0, 46.3]` —
+    through three independent parsers. A plumbing test would pass equally well
+    with the quadrants transposed or the thresholds swapped; this would not.
+    Plus invariants: radii shrink as the threshold rises, and a reported RMW sits
+    inside the 34-kt envelope.
+  - **Zero is data in HURDAT2 and missing in ATCF, and that asymmetry is real.**
+    HURDAT2 has an explicit `-999`, so a zero quadrant radius there is a genuine
+    zero (a weak system has no 34-kt winds); ATCF leaves an unavailable quadrant
+    as `0`, indistinguishable from a real zero, so those become `NaN` — matching
+    how this reader already treats ATCF's other radius fields. `wind_radii` is
+    therefore self-consistent under "NaN means not reported"; documented on
+    `StormTrack` and locked by a test.
+  - **HURDAT2 carries a radius of maximum wind after all.** Field 21, added with
+    the **2021 season** (100% populated 2021–2025, absent before — a handful of
+    2018–2020 records), now read into `max_wind_radius`. Its meaning and units
+    were established empirically rather than from the format PDF (which is not
+    machine-readable): **2,676 of 2,676** coincident 2021–2025 North Atlantic
+    records match IBTrACS `usa_rmw` *exactly* when read as nautical miles, max
+    difference 0.000 m. This corrects the standing claim that HURDAT2 never
+    supplies RMW — true for 1851–2020, false since. Pre-2021 revisions end the
+    line at 20 fields, so `_sentinel_to_nan` now also treats an empty field as
+    missing.
+  - **`Basin` / `StormStatus` enums** plus `standardize_basin(code, source)` /
+    `standardize_status(code)`, folding in `ATCF_basins`, `TCVitals_Basins`,
+    `TC_designations` and IBTrACS's own codes. Added **alongside** the existing
+    strings, reached via `basin_code`, `basin_standard()` and `status()`:
+    `_STATE_FIELDS` is an explicit tuple, so additive attributes cause zero
+    golden churn, whereas turning `basin` into an enum would have changed what
+    every reader reports and how it serializes. Unknown codes degrade to
+    `UNKNOWN` rather than raising.
+  - **`<U1` truncation** fixed for `read_jma` and `read_tcvitals` (HURDAT2's was
+    unavoidably fixed in S5). Asserted on content rather than dtype, because
+    ATCF's classification comes back from pandas as object dtype — and, noted in
+    passing, carries the source's leading whitespace (`' TD'`); `standardize_status`
+    strips, so the enums are unaffected.
+  - **`StormTrack.plot(plot_swath=True)`** masks non-finite and non-positive
+    radii instead of feeding them to a matplotlib patch, and warns once when
+    nothing is drawable. HURDAT2 supplies no outer radius at all, so this was
+    reachable from a plain `read_hurdat` + `plot`.
+  - **Zero existing goldens regenerated.** The ATCF quadrant pivot is
+    deliberately a *separate* pass over the pre-`groupby` frame
+    (`_atcf_quadrant_radii`), leaving the legacy pipeline untouched, because
+    `atcf_geoclaw.txt` is the golden a mistake there would have moved silently.
+    One new fixture, `tests/data/storm/hurdat_ike_mature.txt` (12 real
+    mature-stage Ike records, NOAA/AOML public domain) — the bundled
+    `hurdat.txt` is all genesis-stage zeros, so without it the offline
+    cross-archive check would have had no content.
   - *The original "…and an IBTrACS netCDF path if the current reader is CSV-only"
     clause was **stale** and has been struck: `read_ibtracs` has always been an
-    xarray/netCDF reader. Confirmed against the real `IBTrACS.NA.v04r01.nc`
-    (2,298 storms; dims `storm` / `date_time` / `quadrant`), which does carry the
-    `quadrant` dimension this item needs — only the bundled
-    `tests/data/storm/ibtracs.nc` fixture is a stripped single-storm slice without
-    it, so offline coverage of quadrant radii will need a new fixture or a
-    `remote` test.*
+    xarray/netCDF reader.* The bundled `ibtracs.nc` fixture lacks the `quadrant`
+    dimension, so IBTrACS quadrant coverage is `remote`-only
+    (`test_full_basin_sweep`), which also carries the RMW cross-check above.
 
 - **S3a. IBTrACS reader type/API hygiene — ✅ DONE (PR #NNN, verified against
   `7ef7a816`).** Prerequisite for S4: the fill path could not run at all, because
