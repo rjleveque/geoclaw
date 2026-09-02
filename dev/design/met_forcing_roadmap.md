@@ -30,10 +30,11 @@ below. It is the first of a short series driven by a downstream need to run a
 GeoClaw, which surfaced that **the historical readers cannot currently produce a
 runnable storm file at all**: `read_hurdat`/`read_ibtracs` mark missing radii `-1`
 while `write_geoclaw` tests only `np.isnan`, so `fill_dict` never fires and `-1` is
-written verbatim (a regression against v5.9.0, whose writer checked `== -1`). That
-is the next item, as an S4 prerequisite; then multi-storm ingestion (**S5**, new —
-both archives ship one file per basin and `read_hurdat` is single-storm-only), then
-S3 proper and S4.
+written verbatim (a regression against v5.9.0, whose writer checked `== -1`).
+**That is now also done** (S4-prerequisite, below): the missing-value contract is
+unified on NaN and `test_storm_io[ibtracs]` is no longer `xfail`. Next is
+multi-storm ingestion (**S5**, new — both archives ship one file per basin and
+`read_hurdat` is single-storm-only), then S3 proper and S4.
 
 ## Context
 
@@ -169,14 +170,69 @@ Delivered on branch `met-deprefix-gridded`.
   - `test_storm.py::test_storm_io[ibtracs]` stays `xfail`; the `-1`/NaN sentinel
     bug that causes it is untouched here and is the subject of the next item.
 
+- **S4-prerequisite. Unify the missing-data sentinel on NaN — ✅ DONE (PR #NNN,
+  verified against `7ef7a816`).** The `fill_dict` machinery S4 is built on has
+  been dead for HURDAT/JMA/IBTrACS since the write-path rewrite: those readers
+  marked missing values `-1` while `write_geoclaw` tested only `np.isnan`
+  (`met/parametric.py:172`), so no fill ever fired and `-1` was written verbatim
+  into the storm file. v5.9.0's writer checked `== -1`, so this was a regression,
+  not a design choice.
+  - **Contract, now in three parts.** (1) *In memory, `np.nan` is the only
+    missing marker*, in every reader — `read_atcf` already did this; hurdat, jma,
+    ibtracs and tcvitals now agree, and archive sentinels (HURDAT2 `-99`/`-999`,
+    tcvitals `-99`/`-999`) are normalized **before** unit conversion, so a
+    sentinel is never scaled into a physical-looking value (`-999 mbar` was
+    becoming `-99900.0 Pa`). (2) *At the write boundary a negative is also
+    accepted as missing*, via `ParametricMetForcing._is_missing`, so hand-built
+    objects and community fill functions still on the `-1` convention keep
+    working — with a `DeprecationWarning`. (3) **Zero is never missing.** HURDAT2
+    reports genuinely-zero quadrant wind radii for weak systems, so a "treat
+    `<= 0` as missing" rule — the obvious alternative design — would corrupt real
+    data. A test locks this against a future refactor.
+  - Three further writer bugs found and fixed while in here: the built-in 500 km
+    `storm_radius` default was applied with `dict.update()` *after* copying the
+    caller's `fill_dict`, silently discarding a caller-supplied `storm_radius`
+    fill (now `setdefault`); fills were written back onto the storm object, so
+    writing the same storm twice with different `fill_dict`s reused the first
+    fill (now applied to local copies, and the storm is not mutated); and a
+    fill's return value was never re-checked, so a fill that legitimately fails
+    wrote its sentinel into the file (now re-checked, and the row is skipped).
+    `write_geoclaw` additionally warns when it emits a non-positive radius,
+    naming the offending casts — the check that would have caught
+    `hurdat_geoclaw.txt` being unrunnable.
+  - **Verification: `test_storm_io[ibtracs]` is no longer `xfail`.** The
+    committed `ibtracs_geoclaw.txt` baseline — an independent v5.9.0-era artifact
+    — is reproduced **without regenerating it**. Seven new contract tests in
+    `tests/test_met_objects.py` cover NaN/`-1` write equivalence, failed fills
+    being skipped, zero-is-data, non-mutation, the `setdefault` fix, HURDAT
+    sentinel normalization, and a positivity invariant over the bundled inputs;
+    nine of them fail on `7ef7a816`. The Fortran side is untouched: the
+    `met_forcing` regression storm input is **byte-identical**, so the aux
+    goldens need no `GEOCLAW_REGEN`.
+  - Goldens regenerated: `characterization/read_hurdat.json`,
+    `read_jma.json`, `read_ibtracs.json` — the diffs are purely `-1.0` → `NaN`,
+    which `test_storm_characterization.py:100` already anticipated in a comment.
+    `hurdat_geoclaw.txt` / `jma_geoclaw.txt` are deliberately **not** regenerated
+    here: neither format carries RMW/ROCI, so `test_storm.py`'s silent
+    `radius[:] = 0.0` normalization was converted into an explicit, commented
+    placeholder `fill_dict` rather than deleted (deleting it would skip every row
+    and emit a zero-cast file). Those two baselines are still unrunnable and are
+    S4's to fix.
+  - *Release-note item:* a custom fill function that returns `-1` used to have
+    that `-1` written into the storm file (a silently broken run) and will now
+    have the row skipped instead. A correctness restoration, but it changes
+    output cast counts for such users.
+
 - **S4. Parametric geometry reconstruction (missing-data filling).** Restore and
   modernize the old code's "basic reconstruction from statistical and physical
   data" for the recurring pain of **missing storm geometry** in commonly-available
   best tracks (ATCF/HURDAT/IBTrACS): no radius of maximum winds (RMW), no
   outer/last-closed-isobar radius (ROCI), or only one of max-wind-speed /
-  central-pressure. Today the readers mark these `-1`/`NaN`, warn, and refuse to
-  fill physically — the only automatic default is a flat constant
-  (`storm_radius = 500 km`, `met/parametric.py:150`). This item adds **opt-in,
+  central-pressure. The readers mark these `NaN` and warn, but refuse to fill
+  physically — the only automatic default is a flat constant
+  (`storm_radius = 500 km`, `met/parametric.py:150`). *(The `fill_dict` path they
+  plug into is live again as of the S4-prerequisite item above; before that it
+  was dead for HURDAT/JMA/IBTrACS.)* This item adds **opt-in,
   explicit** estimator functions with the **existing `fill_dict` signature**
   `fn(t, storm) -> value (SI)`, so they drop straight into
   `ParametricMetForcing.write_geoclaw(fill_dict=...)` and compose with the existing
