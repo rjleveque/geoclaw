@@ -36,14 +36,27 @@ unified on NaN and `test_storm_io[ibtracs]` is no longer `xfail`. **Multi-storm
 ingestion is also done** (**S5**, new — `iter_hurdat` / `iter_ibtracs` /
 `iter_atcf` plus `catalog_*` indices), and so is **S3** (quadrant radii,
 `Basin`/`StormStatus` enums, the remaining `<U1` truncations, and HURDAT2's
-post-2021 RMW column). **S4's module and test harness are done too**
-(`met/reconstruction.py`) — but its regression *coefficients* are deliberately
-unshipped and await maintainer transcription from the papers, so S4 is the one
-open short-term item. It is still needed despite the HURDAT2 RMW find: RMW is
-reported at only **55%** of North Atlantic 1980–2025 IBTrACS track points and
-just **0.4%** in the 1980s–90s, so most of a 45-year ensemble has no reported
-storm geometry. With the whole short-term list closed, the next substantial item
-is the **M1 parametric generator** (kernel territory, currently pinned).
+post-2021 RMW column), and so is **S4** (`met/reconstruction.py`, PR #736), whose
+coefficients were transcribed from the papers and verified against the 21,683
+IBTrACS points that report an RMW. Note the scale of the gap S4 fills: RMW is
+reported at only **55%** of North Atlantic 1980–2025 track points and just
+**0.4%** in the 1980s–90s, so most of a 45-year ensemble has no reported storm
+geometry.
+
+**Progress (2026-09-04):** S1–S5 are closed. Three short-term items remain, all
+opened by the S4 work rather than planned:
+
+* **S6** — the Willoughby `X1` regression-family error. Patch and full
+  verification prepared; the coefficient edit itself is the maintainer's, being
+  a wind model.
+* **S7** — `adjust_max_wind` over-corrects the motion asymmetry. Left alone
+  deliberately: it moves every forward-model golden, *and* a downstream
+  calibration was derived under the current value, so it is not a self-contained
+  change.
+* **S8** — seven parametric models have no Fortran-level regression coverage.
+  This is the gap that let S6 survive, which is the argument for closing it.
+
+After those, the **M1 parametric generator** (kernel territory, pinned).
 
 ## Context
 
@@ -531,12 +544,13 @@ Delivered on branch `met-deprefix-gridded`.
     dictionaries cannot be compared with `==`, because `nan != nan`. Compare
     `_dumps(...)` text, as the characterization tests do.
 
-- **S6. Fortran Willoughby `X1` uses the wrong regression family — OPEN
-  (found 2026-09-04, flagged not patched).** Willoughby et al. (2006) gives two
+- **S6. Fortran Willoughby `X1` used the wrong regression family — ✅ FIXED
+  (maintainer-applied, 2026-09-04).** Willoughby et al. (2006) gives two
   dual-exponential regression families: Eqs. (10a–c) predict from `V_max` and
   latitude, Eqs. (11a–c) add `ln(R_max)` as a predictor. They are not
   term-by-term interchangeable — in (10) the variance that would load on
-  `ln(R_max)` instead loads on `V_max` and latitude through their correlations.
+  `ln(R_max)` instead loads on `V_max` and latitude through their correlations —
+  so a routine must use one family throughout.
 
   `set_willoughby_fields` mixes them:
 
@@ -546,31 +560,104 @@ Delivered on branch `met-deprefix-gridded`.
   | `A` | `0.5913 + 0.0029 V − 0.1361 ln(R) − 0.0042 φ` | Eq. (11c) | ✓ |
   | `X1` | `317.1 − 2.026 V + 1.915 φ` | **Eq. (10a)** | ✗ |
 
-  So `n` and `A` use the observed `R_max` while the outer decay length alone
-  discards it. Correct form:
-
   ```fortran
-  X1 = (287.6d0 - 1.942d0*mod_mws + 7.799d0*log(mwr/1.d3) + 1.819d0*abs(sloc(2))) * 1.d3
+  X1 = (287.6d0 - 1.942d0*mod_mws + 7.799d0*log(mwr/1.d3) &
+        + 1.819d0*abs(sloc(2))) * 1.d3
   ```
 
-  **Measured impact, so the goldens cost is known before anyone touches it.**
-  Over the 21,683 IBTrACS-NA points with a reported `R_max`: median change
-  **+2.8 km** on an `X1` of ~330 km, 5th–95th percentile −5 to +10 km, maximum
-  20 km, and no point exceeds 20 km. Direction is as the mechanism predicts
-  (compact storms −3.8 km, large storms +8.6 km) but the magnitude is
-  low-single-digit percent, because `7.799·ln(R_max)` spans only ~11 km across
-  the observed size range while the intercept difference (317.1 vs 287.6) partly
-  offsets the slope changes. **The bug is real and the fix is cheap; it is not
-  urgent.**
+  Kernel territory, so the coefficient edit was the maintainer's; the
+  verification around it was prepared separately. All three coefficients now
+  come from the Eq. (11) family, with the superseded Eq. (10) forms kept as
+  commented reference.
 
-  Kernel territory (a wind model), so flagged for the maintainer rather than
-  patched. Pinned by
-  `test_reconstruction.py::test_fortran_willoughby_x1_regression_family_is_pinned`,
-  which fails when the fix lands and points here.
+  **Measured impact, so the cost is known before the edit.** Over the 21,683
+  IBTrACS-NA points with a reported `R_max`: median change **+2.8 km** on an
+  `X1` of ~330 km, 5th–95th percentile −5 to +10 km, maximum 20 km. Direction is
+  as the mechanism predicts (compact storms −3.8 km, large storms +8.6 km) but
+  the magnitude is low-single-digit percent, because `7.799·ln(R_max)` spans
+  only ~11 km across observed sizes while the intercept difference partly
+  offsets the slope changes. **Real and cheap to fix; not urgent.**
 
-  Cleared as *non*-bugs in the same routine: `X2 = 25 km` is correct, and the
-  0.9/1.1·`R_max` transition band is a documented simplification of solving
-  Eq. (3) for ξ, not an error.
+  **Why it survived: the model had no Fortran-level coverage at all** (see S8).
+  This item therefore also adds the first Willoughby regression case, and the
+  verification is built around not needing M1's Python generator, which is
+  pinned:
+  - `test_willoughby_n_and_A_use_the_ln_rmax_family` and
+    `test_willoughby_x1_uses_the_same_family_as_n_and_A`
+    (`tests/test_reconstruction.py`) assert one family throughout — catching
+    exactly this bug class rather than this instance of it. The X1 one is
+    `xfail(strict=True)` until the patch lands, at which point it XPASSes and
+    forces removal of the marker.
+  - `test_willoughby_field_shape` checks the produced aux field directly:
+    finite and non-negative wind, a real pressure deficit, monotone decay
+    outside the eyewall, and no jump across the sectionally-continuous
+    0.9/1.1·`R_max` band. Statements about *shape*, since
+    `post_process_wind_estimate` rescales and adds translation speed so the peak
+    is not `V_max`.
+  - `aux_willoughby.txt`, the new regression golden, generated **after** the
+    fix. (Worth stating because the trap is live: adding the test first and
+    running it auto-creates a golden from the unfixed code and enshrines the
+    bug. That happened twice during this work and was caught both times by
+    checking the file's mtime against the source's.)
+
+  **Measured effect on the field**, from regenerating the golden either side of
+  the change (409 cells carrying more than 0.5 m/s of wind): median **+1.37%**,
+  5th-95th percentile +0.27% to +2.00%, maximum +2.08%; largest absolute change
+  0.150 m/s on a 41.0 m/s peak, and pressure unchanged to the byte (`X1` enters
+  only the wind profile). So the earlier estimate of "low single-digit percent
+  in the outer wind" is confirmed by measurement rather than inference.
+  - `X2 = 25 km` and the 0.9/1.1 transition band are cleared as non-bugs; the
+    latter is a documented simplification of solving Eq. (3) for ξ.
+
+  *Non-issue checked and dismissed:* the new `log(mwr/1.d3)` term does not add a
+  failure mode for a non-positive `R_max` — `n` and `A` already call
+  `log(mwr/1.d3)` unguarded two lines above, so that exposure is pre-existing
+  and unchanged.
+
+- **S7. Fortran `adjust_max_wind` over-corrects the motion asymmetry — OPEN.**
+  It subtracts the *full* translation magnitude:
+
+  ```fortran
+  trans_speed = sqrt(tv(1)**2 + tv(2)**2)
+  mod_mws = mws - trans_speed          ! full |t|
+  ```
+
+  The canonical reduction is about half the forward speed at the radius of
+  maximum winds (Phadke et al. 2003, the same pipeline as Knaff et al. 2011);
+  Lin & Chavas (2012) use a gentler 0.55–0.7 on a rotated motion vector. Full
+  subtraction over-corrects, and since Willoughby's Eq. (7a) is monotone
+  decreasing in `V_max`, it biases a reconstructed `R_max` high.
+
+  **Deliberately not changed, for two reasons.** First, `adjust_max_wind` is
+  shared by every model passing `convert_height=.true.` — Holland included — so
+  the edit moves *every* forward-model golden, not just Willoughby's. Second,
+  and less obvious: `clawpack.geoclaw.met.reconstruction.ASYMMETRY_FRACTION` is
+  already 0.5, and the downstream `atlantic-rp` study's RMW calibration was
+  **derived under that value** and raises `CalibrationConventionMismatch` if it
+  changes. Aligning the Fortran is therefore not self-contained — it would
+  require re-deriving that calibration. The divergence is pinned by
+  `test_wind_conventions_versus_the_fortran` so it cannot become accidental.
+
+  If it is changed, also revisit the bound-at-zero branch
+  (`trans_mod = mws / trans_speed`), which fires far less often at 0.5F: over
+  the North Atlantic 1980–2025 record, points driven to zero fall from 267 to 9.
+
+- **S8. Seven parametric wind models have no Fortran-level regression coverage —
+  OPEN.** `met_forcing_module.f90` dispatches nine
+  (`holland80`, `holland2008`, `holland2010`, `cle`, `slosh`, `rankine`,
+  `modified_rankine`, `demaria`, `willoughby`); the goldens on disk are
+  `aux_holland80`, `aux_data`, `aux_owi`. **This gap is how S6's wrong
+  regression family survived**, and it is the strongest argument for closing it.
+
+  S6 adds the Willoughby case, leaving seven. The harness is already generic —
+  `tests/regression/met_forcing/setrun.py` passes `forcing` straight to
+  `storm_specification_type` for parametric models, and `_check_aux` creates a
+  golden when absent — so each addition is close to mechanical, and S6's case is
+  the worked example. Expect surprises: any of the seven could carry its own
+  coefficient error, CLE most likely, being the heaviest. Note also that a
+  golden characterizes *current* behaviour, so each new case should be paired
+  with at least the field-shape invariants S6 introduces, or it will simply pin
+  whatever is there.
 
 ### MEDIUM TERM
 

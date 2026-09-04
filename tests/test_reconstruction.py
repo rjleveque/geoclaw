@@ -611,52 +611,85 @@ def test_rmw_sampled_requires_a_seed_and_is_reproducible():
 
 
 # ---------------------------------------------------------------------------
-# Pinned finding: the Fortran Willoughby X1 uses the wrong regression family
+# The Willoughby profile coefficients must come from one regression family
 # ---------------------------------------------------------------------------
 
-def test_fortran_willoughby_x1_regression_family_is_pinned():
-    """Document that ``set_willoughby_fields`` mixes two regression families.
+def _willoughby_source():
+    """Live (non-comment) source of ``set_willoughby_fields``, whitespace-free.
+
+    Comments are stripped and spaces removed before matching.  Both matter:
+    Fortran spacing around operators is a style choice that a coefficient test
+    must not depend on, and -- more importantly -- the routine keeps
+    commented-out copies of the superseded Eq. (10) forms for reference, so a
+    naive substring match can pass against *dead code* while the live line says
+    something else.
+    """
+    path = (Path(__file__).parents[1] / "src" / "2d" / "shallow" / "surge"
+            / "parametric_met_forcing_module.f90")
+    if not path.exists():
+        pytest.skip("Fortran source not present in this checkout")
+    text = path.read_text()
+    start = text.index("subroutine set_willoughby_fields")
+    body = text[start:text.index("end subroutine set_willoughby_fields", start)]
+
+    live = []
+    for line in body.split("\n"):
+        code = line.split("!", 1)[0]      # Fortran comment delimiter
+        if code.strip():
+            live.append(code)
+    return "".join("".join(live).split())
+
+
+def _has_terms(source, *terms):
+    """Whether every *term* appears, each already whitespace-free."""
+    return all(term.replace(" ", "") in source for term in terms)
+
+
+def test_willoughby_n_and_A_use_the_ln_rmax_family():
+    """``n`` and ``A`` take ``ln(R_max)`` as a predictor -- Eqs. (11b), (11c).
 
     Willoughby et al. (2006) gives two dual-exponential families: Eqs. (10a-c)
-    predict from ``V_max`` and latitude only, Eqs. (11a-c) add ``ln(R_max)`` as a
-    predictor.  They are not term-by-term interchangeable -- in (10) the variance
-    that would load on ``ln(R_max)`` instead loads on ``V_max`` and latitude
-    through their correlations.
+    predict from ``V_max`` and latitude alone, Eqs. (11a-c) add ``ln(R_max)``.
+    They are not term-by-term interchangeable -- in (10) the variance that would
+    load on ``ln(R_max)`` instead loads on ``V_max`` and latitude through their
+    correlations -- so a routine must use one family throughout.
+    """
+    source = _willoughby_source()
+    assert _has_terms(source, "2.134d0", "0.0077d0*mod_mws", "0.4522d0*log"), \
+        "n no longer matches Eq. (11b)"
+    assert _has_terms(source, "0.5913d0", "0.0029d0*mod_mws", "0.1361"), \
+        "A no longer matches Eq. (11c)"
+    # The Eq. (10) forms must not be live, only commented for reference.
+    assert "0.4067d0" not in source, "n has reverted to the Eq. (10b) form"
+    assert "0.0696d0" not in source, "A has reverted to the Eq. (10c) form"
 
-    The Fortran uses (11b) for ``n`` and (11c) for ``A``, consistent with
-    GeoClaw feeding an observed ``R_max``, but **(10a) for X1** -- so the outer
-    decay length alone discards the observed size.  Internally inconsistent.
 
-    Correct X1 would be Eq. (11a)::
+def test_willoughby_x1_uses_the_same_family_as_n_and_A():
+    """``X1`` must also be the ``ln(R_max)`` form -- Eq. (11a).
+
+    It previously used Eq. (10a), so the outer decay length alone discarded the
+    observed storm size while ``n`` and ``A`` retained it: internally
+    inconsistent, and worst for storms whose size is anomalous for their
+    intensity, which are the ones that matter for surge.
 
         X1 = 287.6 - 1.942*V_max + 7.799*ln(R_max) + 1.819*phi
 
-    Measured impact over 21,683 IBTrACS points with a reported ``R_max``: median
-    change +2.8 km on an X1 of ~330 km, 5th-95th percentile -5 to +10 km, maximum
-    20 km.  Direction is as expected -- compact storms -3.8 km, large storms
-    +8.6 km -- because the ``ln(R_max)`` term only spans ~11 km across the
-    observed size range while the intercept difference partly offsets it.  So the
-    fix is correct and cheap, but it is a low-single-digit-percent change to the
-    outer wind field, not a dramatic one.
-
-    This is a wind model, i.e. kernel territory, so it is flagged rather than
-    patched.  When it is fixed, this test fails and points here.
+    Measured effect of the correction over the 21,683 IBTrACS North Atlantic
+    points with a reported ``R_max``: median +2.8 km on an ``X1`` of ~330 km,
+    5th-95th percentile -5 to +10 km, maximum 20 km -- compact storms -3.8 km,
+    large storms +8.6 km.  Real but low-single-digit percent, because
+    ``7.799*ln(R_max)`` spans only ~11 km across observed sizes while the
+    intercept difference (317.1 vs 287.6) partly offsets the slope changes.
     """
-    source = (Path(__file__).parents[1] / "src" / "2d" / "shallow" / "surge"
-              / "parametric_met_forcing_module.f90")
-    if not source.exists():
-        pytest.skip("Fortran source not present in this checkout")
-    text = source.read_text()
+    source = _willoughby_source()
+    assert _has_terms(source, "287.6d0", "1.942d0*mod_mws", "7.799d0*log",
+                      "1.819"), \
+        "X1 does not carry the Eq. (11a) coefficients"
+    assert "317.1d0" not in source, (
+        "the Eq. (10a) X1 is still live -- if it is only kept as a commented "
+        "reference, this helper should have stripped it")
 
-    # n and A already use the ln(R_max) family -- these should keep passing.
-    assert "2.134d0 + 0.0077d0*mod_mws - 0.4522d0*log(mwr/1.d3)" in text, \
-        "n no longer matches Eq. (11b)"
-    assert "0.5913d0 + 0.0029d0*mod_mws - 0.1361*log(mwr/1.d3)" in text, \
-        "A no longer matches Eq. (11c)"
 
-    # X1 still uses the no-R_max family.  When this assertion fails, the bug has
-    # been fixed: delete it, and update the met_forcing_roadmap entry.
-    assert "317.1d0 - 2.026d0*mod_mws + 1.915d0*abs(sloc(2))" in text, (
-        "X1 no longer matches Eq. (10a) -- if it now matches Eq. (11a), the "
-        "known bug is fixed: remove this assertion and close the roadmap item.")
-    assert "287.6" not in text, "Eq. (11a) X1 appears to have been adopted"
+def test_willoughby_x2_is_the_published_constant():
+    """``X2`` is fixed at 25 km in the paper; cleared as a non-bug."""
+    assert _has_terms(_willoughby_source(), "X2=25.d3")
