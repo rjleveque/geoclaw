@@ -52,7 +52,6 @@ class FGoutFrame(object):
         self._v = None
         self._s = None
         self._hss = None
-        self._hm = None
 
         # dclaw specific attributes
         self._hm = None
