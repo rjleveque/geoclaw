@@ -469,8 +469,6 @@ def _build_run_gridded(sub, storm_path, prebuilt):
     runner.write_data()
     _install_executable(runner, prebuilt)
     runner.run_code()
-    if return_path:
-        return _collect_aux(runner.temp_path), runner.temp_path
     return _collect_aux(runner.temp_path)
 
 

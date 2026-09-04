@@ -544,8 +544,8 @@ Delivered on branch `met-deprefix-gridded`.
     dictionaries cannot be compared with `==`, because `nan != nan`. Compare
     `_dumps(...)` text, as the characterization tests do.
 
-- **S6. Fortran Willoughby `X1` uses the wrong regression family — patch
-  prepared, awaiting the maintainer's edit.** Willoughby et al. (2006) gives two
+- **S6. Fortran Willoughby `X1` used the wrong regression family — ✅ FIXED
+  (maintainer-applied, 2026-09-04).** Willoughby et al. (2006) gives two
   dual-exponential regression families: Eqs. (10a–c) predict from `V_max` and
   latitude, Eqs. (11a–c) add `ln(R_max)` as a predictor. They are not
   term-by-term interchangeable — in (10) the variance that would load on
@@ -565,8 +565,10 @@ Delivered on branch `met-deprefix-gridded`.
         + 1.819d0*abs(sloc(2))) * 1.d3
   ```
 
-  Kernel territory (a wind model), so the coefficient edit is the maintainer's;
-  everything around it is prepared.
+  Kernel territory, so the coefficient edit was the maintainer's; the
+  verification around it was prepared separately. All three coefficients now
+  come from the Eq. (11) family, with the superseded Eq. (10) forms kept as
+  commented reference.
 
   **Measured impact, so the cost is known before the edit.** Over the 21,683
   IBTrACS-NA points with a reported `R_max`: median change **+2.8 km** on an
@@ -592,8 +594,18 @@ Delivered on branch `met-deprefix-gridded`.
     0.9/1.1·`R_max` band. Statements about *shape*, since
     `post_process_wind_estimate` rescales and adds translation speed so the peak
     is not `V_max`.
-  - `aux_willoughby.txt`, a new regression golden — **to be generated after the
-    patch**, not before, or it enshrines the bug.
+  - `aux_willoughby.txt`, the new regression golden, generated **after** the
+    fix. (Worth stating because the trap is live: adding the test first and
+    running it auto-creates a golden from the unfixed code and enshrines the
+    bug. That happened twice during this work and was caught both times by
+    checking the file's mtime against the source's.)
+
+  **Measured effect on the field**, from regenerating the golden either side of
+  the change (409 cells carrying more than 0.5 m/s of wind): median **+1.37%**,
+  5th-95th percentile +0.27% to +2.00%, maximum +2.08%; largest absolute change
+  0.150 m/s on a 41.0 m/s peak, and pressure unchanged to the byte (`X1` enters
+  only the wind profile). So the earlier estimate of "low single-digit percent
+  in the outer wind" is confirmed by measurement rather than inference.
   - `X2 = 25 km` and the 0.9/1.1 transition band are cleared as non-bugs; the
     latter is a documented simplification of solving Eq. (3) for ξ.
 

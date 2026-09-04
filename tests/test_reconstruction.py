@@ -615,13 +615,34 @@ def test_rmw_sampled_requires_a_seed_and_is_reproducible():
 # ---------------------------------------------------------------------------
 
 def _willoughby_source():
+    """Live (non-comment) source of ``set_willoughby_fields``, whitespace-free.
+
+    Comments are stripped and spaces removed before matching.  Both matter:
+    Fortran spacing around operators is a style choice that a coefficient test
+    must not depend on, and -- more importantly -- the routine keeps
+    commented-out copies of the superseded Eq. (10) forms for reference, so a
+    naive substring match can pass against *dead code* while the live line says
+    something else.
+    """
     path = (Path(__file__).parents[1] / "src" / "2d" / "shallow" / "surge"
             / "parametric_met_forcing_module.f90")
     if not path.exists():
         pytest.skip("Fortran source not present in this checkout")
     text = path.read_text()
     start = text.index("subroutine set_willoughby_fields")
-    return text[start:text.index("end subroutine set_willoughby_fields", start)]
+    body = text[start:text.index("end subroutine set_willoughby_fields", start)]
+
+    live = []
+    for line in body.split("\n"):
+        code = line.split("!", 1)[0]      # Fortran comment delimiter
+        if code.strip():
+            live.append(code)
+    return "".join("".join(live).split())
+
+
+def _has_terms(source, *terms):
+    """Whether every *term* appears, each already whitespace-free."""
+    return all(term.replace(" ", "") in source for term in terms)
 
 
 def test_willoughby_n_and_A_use_the_ln_rmax_family():
@@ -634,24 +655,22 @@ def test_willoughby_n_and_A_use_the_ln_rmax_family():
     correlations -- so a routine must use one family throughout.
     """
     source = _willoughby_source()
-    assert "2.134d0 + 0.0077d0*mod_mws - 0.4522d0*log(mwr/1.d3)" in source, \
+    assert _has_terms(source, "2.134d0", "0.0077d0*mod_mws", "0.4522d0*log"), \
         "n no longer matches Eq. (11b)"
-    assert "0.5913d0 + 0.0029d0*mod_mws - 0.1361*log(mwr/1.d3)" in source, \
+    assert _has_terms(source, "0.5913d0", "0.0029d0*mod_mws", "0.1361"), \
         "A no longer matches Eq. (11c)"
+    # The Eq. (10) forms must not be live, only commented for reference.
+    assert "0.4067d0" not in source, "n has reverted to the Eq. (10b) form"
+    assert "0.0696d0" not in source, "A has reverted to the Eq. (10c) form"
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="roadmap S6: the Eq. (11a) X1 patch is not applied "
-                          "yet. When it is, this XPASSes -- remove the marker.")
 def test_willoughby_x1_uses_the_same_family_as_n_and_A():
     """``X1`` must also be the ``ln(R_max)`` form -- Eq. (11a).
 
-    It currently uses Eq. (10a), so the outer decay length alone discards the
-    observed storm size while ``n`` and ``A`` retain it: internally
+    It previously used Eq. (10a), so the outer decay length alone discarded the
+    observed storm size while ``n`` and ``A`` retained it: internally
     inconsistent, and worst for storms whose size is anomalous for their
     intensity, which are the ones that matter for surge.
-
-    Correct form::
 
         X1 = 287.6 - 1.942*V_max + 7.799*ln(R_max) + 1.819*phi
 
@@ -663,13 +682,14 @@ def test_willoughby_x1_uses_the_same_family_as_n_and_A():
     intercept difference (317.1 vs 287.6) partly offsets the slope changes.
     """
     source = _willoughby_source()
-    assert "287.6d0" in source and "1.942d0" in source, \
+    assert _has_terms(source, "287.6d0", "1.942d0*mod_mws", "7.799d0*log",
+                      "1.819"), \
         "X1 does not carry the Eq. (11a) coefficients"
-    assert "7.799d0*log(mwr/1.d3)" in source, \
-        "X1 is missing the ln(R_max) term that makes it the (11) family"
-    assert "317.1d0" not in source, "the Eq. (10a) X1 is still present"
+    assert "317.1d0" not in source, (
+        "the Eq. (10a) X1 is still live -- if it is only kept as a commented "
+        "reference, this helper should have stripped it")
 
 
 def test_willoughby_x2_is_the_published_constant():
     """``X2`` is fixed at 25 km in the paper; cleared as a non-bug."""
-    assert "X2 = 25.d3" in _willoughby_source()
+    assert _has_terms(_willoughby_source(), "X2=25.d3")
