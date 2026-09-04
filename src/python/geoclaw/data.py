@@ -378,8 +378,51 @@ class TopographyData(clawpack.clawutil.data.ClawData):
                     os.path.join(os.path.dirname(out_file), topo.path))
 
                 f = self._out_file
+
+                # topo_type may still be None when a Topography was built by
+                # hand and never read; the :3d format below would raise a
+                # TypeError naming neither the file nor the attribute.
+                _topo_type = topo.topo_type
+                if _topo_type is None:
+                    from clawpack.geoclaw import topotools
+                    _topo_type = topotools.determine_topo_type(
+                        topo.path, default=None)
+                    if _topo_type is None:
+                        raise ValueError(
+                            f"topo_type is not set for {topo.path} and cannot "
+                            f"be inferred from its extension. Set topo.topo_type "
+                            f"explicitly, or pass topo_type= to Topography().")
+                    topo.topo_type = _topo_type
+
+                # Type 5 (GeoTIFF) is readable in Python but has no case(5) in
+                # the Fortran reader, which aborts with "Unrecognized topo_type".
+                if abs(_topo_type) == 5:
+                    warnings.warn(
+                        f"{topo.path} is written to {out_file} as topo_type=5 "
+                        f"(GeoTIFF). GeoClaw's Fortran reader does not support "
+                        f"type 5 and will abort; convert to topo_type 3 or 4 "
+                        f"(Topography.write) before running.",
+                        UserWarning, stacklevel=2)
+
+                # A crop that crosses the antimeridian cannot be expressed as a
+                # single descriptor: crop_bounds would read "170.0 -170.0",
+                # which Fortran resolves to mx=0, my=0 -- an empty topo file,
+                # silently.  TopoInspector.topo_entries() splits such a crop
+                # into two entries with the appropriate lon_wrap_offset.
+                if (topo.crop_extent is not None
+                        and topo.crop_extent[0] >= topo.crop_extent[1]
+                        and getattr(topo, '_netcdf_meta', None) is None):
+                    raise ValueError(
+                        f"crop_extent {list(topo.crop_extent)} for {topo.path} "
+                        f"is descending in longitude, i.e. it crosses the "
+                        f"antimeridian. Written directly it would produce an "
+                        f"empty grid in Fortran with no error. Build the entries "
+                        f"with TopoInspector.topo_entries(), which emits one "
+                        f"entry per side of the seam with the correct "
+                        f"lon_wrap_offset, and append those to topofiles.")
+
                 f.write(f"\n'{fname}'   # topo_path\n")
-                f.write(f"{topo.topo_type:3d}   # topo_type\n")
+                f.write(f"{_topo_type:3d}   # topo_type\n")
                 _write_preprocessing_block(f, topo)
 
                 # For NetCDF (type 4): write the CF descriptor block that

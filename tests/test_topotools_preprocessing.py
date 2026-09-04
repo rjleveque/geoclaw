@@ -1202,7 +1202,11 @@ def test_crop_no_overlap_keeps_full_grid(nc_topo_path):
 
     t = Topography()
     t.crop_extent = [100.0, 200.0, 100.0, 200.0]
-    t.read(path, topo_type=4)
+    # The fall-back is kept, but it must not be silent: the Fortran reader
+    # treats the same condition as fatal, so a run that ignores this here
+    # fails there instead.
+    with pytest.warns(UserWarning, match="did not overlap"):
+        t.read(path, topo_type=4)
 
     np.testing.assert_array_equal(t.Z, ref.Z)
 
@@ -1302,3 +1306,226 @@ def test_coarsen_align_lattice_invariant(tmp_path):
         yphase = (tk.y[0] - align[1]) / coarsen
         assert abs(xphase - round(xphase)) < 1e-9, (k, tk.x[0])
         assert abs(yphase - round(yphase)) < 1e-9, (k, tk.y[0])
+
+
+# ===========================================================================
+# Group N — Antimeridian and degenerate crop windows
+#
+# Nothing exercised antimeridian cropping through Topography before these,
+# which is how the failures below shipped silently.  The point of the group is
+# that a Topography *never wraps*: a crop is either an ordinary ascending
+# window, or it is not expressible on a single Topography at all and has to go
+# through TopoInspector.topo_entries().
+# ===========================================================================
+
+_WRAPPED_CROP = [170.0, -170.0, -5.0, 5.0]      # crosses the seam, descending
+_CONTINUOUS_CROP = [-211.0, -99.0, -5.0, 5.0]   # same region, continuous coords
+
+
+def _write_global_tt3(path: Path) -> Path:
+    """A 1-degree global file spanning the antimeridian, x in [-180, 180]."""
+    x = np.linspace(-180.0, 180.0, 361)
+    y = np.linspace(-10.0, 10.0, 21)
+    Z = -1000.0 + 10.0 * np.cos(np.radians(x))[None, :] * np.ones((y.size, 1))
+    t = Topography()
+    t.set_xyZ(x, y, Z)
+    t.write(str(path), topo_type=3)
+    return path
+
+
+@pytest.fixture
+def global_tt3_path(tmp_path):
+    return _write_global_tt3(tmp_path / "global.tt3")
+
+
+def test_wrapped_crop_spelling_raises_not_empty_grid(global_tt3_path):
+    """[170, -170] used to produce an *empty* Topography (Z.shape == (11, 0))
+    whose .extent then raised an opaque "zero-size array to reduction" from
+    numpy, far from the cause."""
+    t = Topography()
+    t.crop_extent = list(_WRAPPED_CROP)
+    with pytest.raises(ValueError, match="must increase in both coordinates"):
+        t.read(str(global_tt3_path), topo_type=3)
+
+
+def test_wrapped_crop_error_names_the_supported_route(global_tt3_path):
+    """The error has to say what to do instead, or it just moves the confusion."""
+    t = Topography()
+    t.crop_extent = list(_WRAPPED_CROP)
+    with pytest.raises(ValueError) as excinfo:
+        t.read(str(global_tt3_path), topo_type=3)
+    assert "topo_entries" in str(excinfo.value)
+
+
+def test_descending_latitude_crop_also_raises(global_tt3_path):
+    """A descending *latitude* pair has no antimeridian excuse at all; it was
+    equally silent."""
+    t = Topography()
+    t.crop_extent = [-100.0, -80.0, 5.0, -5.0]
+    with pytest.raises(ValueError, match="must increase in both coordinates"):
+        t.read(str(global_tt3_path), topo_type=3)
+
+
+def test_continuous_crop_is_clipped_and_says_so(global_tt3_path):
+    """The continuous spelling is accepted, but it is *not* wrapped -- it is
+    reduced to the part of the file that exists (112 degrees requested, 81
+    delivered).  That silent reduction is the whole antimeridian confusion, so
+    it must warn."""
+    t = Topography()
+    t.crop_extent = list(_CONTINUOUS_CROP)
+    with pytest.warns(UserWarning, match="extends past the data"):
+        t.read(str(global_tt3_path), topo_type=3)
+
+    # Clipped to the file's western edge, not wrapped around to +149.
+    assert float(t.x[0]) == pytest.approx(-180.0)
+    assert float(t.x[-1]) == pytest.approx(-99.0)
+
+
+def test_ordinary_crop_does_not_warn(global_tt3_path):
+    """The clipping warning must not fire for a crop wholly inside the file,
+    or it becomes noise everyone filters."""
+    t = Topography()
+    t.crop_extent = [-100.0, -80.0, -5.0, 5.0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        t.read(str(global_tt3_path), topo_type=3)
+    assert float(t.x[0]) == pytest.approx(-100.0)
+
+
+def test_crop_between_grid_points_raises(global_tt3_path):
+    """A window inside the extent but narrower than one cell contains no data.
+    It used to return the *full file* -- the opposite of what was asked."""
+    t = Topography()
+    t.crop_extent = [10.2, 10.8, -5.0, 5.0]
+    with pytest.raises(ValueError, match="lies between grid points"):
+        t.read(str(global_tt3_path), topo_type=3)
+
+
+def test_crop_no_overlap_ascii_warns_and_keeps_full_grid(global_tt3_path):
+    """ASCII counterpart of test_crop_no_overlap_keeps_full_grid."""
+    t = Topography()
+    t.crop_extent = [300.0, 320.0, -5.0, 5.0]
+    with pytest.warns(UserWarning, match="did not overlap"):
+        t.read(str(global_tt3_path), topo_type=3)
+    assert t.x.size == 361
+
+
+def test_unstructured_with_crop_raises_not_typeerror(tmp_path):
+    """This used to die with `TypeError: list indices must be integers` from
+    indexing a Python list as an array, several frames from the cause.  crop()
+    already refused unstructured input; read() now agrees.
+
+    The fixture is a genuine 3-column xyz file (not a headed .tt3) so that the
+    read gets far enough to hit that bug when the guard is removed -- a test
+    whose "before" failure is an unrelated parse error would pin nothing.
+    """
+    xyz = tmp_path / "scattered.xyz"
+    with open(xyz, "w") as f:
+        for x in np.linspace(-110.0, -70.0, 9):
+            for y in np.linspace(-8.0, 8.0, 5):
+                f.write(f"{x} {y} {-1000.0 + x + y}\n")
+
+    t = Topography()
+    t.crop_extent = [-100.0, -80.0, -5.0, 5.0]
+    with pytest.raises(NotImplementedError, match="unstructured"):
+        t.read(str(xyz), topo_type=1, unstructured=True)
+
+
+def test_cross_seam_crop_raises_at_topo_data_write(global_tt3_path, tmp_path):
+    """Writing a descending crop_extent used to emit `crop_bounds = 170.0
+    -170.0`, which Fortran resolves to mx=0, my=0: an empty topo, no error."""
+    t = Topography()
+    t.path = str(global_tt3_path)
+    t.topo_type = 3
+    t.crop_extent = list(_WRAPPED_CROP)
+
+    td = TopographyData()
+    td.topofiles = [t]
+    with pytest.raises(ValueError, match="crosses the antimeridian"):
+        td.write(out_file=str(tmp_path / "topo.data"))
+
+
+def test_topo_type_none_inferred_from_suffix(global_tt3_path, tmp_path):
+    """topo_type=None reached the `:3d` format and raised a TypeError naming
+    neither the file nor the attribute.  A .tt3 suffix is unambiguous."""
+    t = Topography()
+    t.path = str(global_tt3_path)
+    t.topo_type = None
+
+    td = TopographyData()
+    td.topofiles = [t]
+    out = tmp_path / "topo.data"
+    td.write(out_file=str(out))
+    assert t.topo_type == 3
+    assert "  3   # topo_type" in out.read_text()
+
+
+def test_topo_type_none_unknown_suffix_raises(tmp_path):
+    """When the suffix carries no type either, say which attribute to set."""
+    src = _write_global_tt3(tmp_path / "global.tt3")
+    unknown = tmp_path / "global.dat"
+    unknown.write_bytes(src.read_bytes())
+
+    t = Topography()
+    t.path = str(unknown)
+    t.topo_type = None
+
+    td = TopographyData()
+    td.topofiles = [t]
+    with pytest.raises(ValueError, match="topo_type is not set"):
+        td.write(out_file=str(tmp_path / "topo.data"))
+
+
+@pytest.mark.netcdf
+def test_cropped_netcdf_read_after_read_header_updates_extent(tmp_path):
+    """read_header() populates _extent from the file header; the topo_type=4
+    read applies its crop while reading the hyperslab, bypassing the property
+    setters that would invalidate it.  The object then reported the *full file*
+    extent alongside cropped data -- and .extent is what _compute_priority_order
+    and the plotting routines use."""
+    pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    path, _, _ = tmp_path / "nc_extent.nc", None, None
+    _make_nc_topo(path, "lon", "lat")
+
+    t = Topography()
+    t.path = str(path)
+    t.topo_type = 4
+    t.read_header()
+    assert list(t.extent) == pytest.approx([_ORIGIN_X, _ORIGIN_X + _NX - 1,
+                                            _ORIGIN_Y, _ORIGIN_Y + _NY - 1])
+
+    t.crop_extent = [_ORIGIN_X + 2, _ORIGIN_X + 5,
+                     _ORIGIN_Y + 2, _ORIGIN_Y + 5]
+    t.read()
+
+    assert list(t.extent) == pytest.approx(
+        [float(t.x[0]), float(t.x[-1]), float(t.y[0]), float(t.y[-1])])
+    assert float(t.extent[0]) == pytest.approx(_ORIGIN_X + 2)
+
+
+def test_buffer_and_coarsen_give_absolute_output_shape(tt2_path):
+    """The existing combined test is a *relative* netCDF-vs-ASCII equality, so
+    nothing pinned whether buffer=1, coarsen=2 adds 1 or 2 output points per
+    side.  buffer counts coarsened *output* points: the window is expanded by
+    buffer*coarsen native points before the strided slice."""
+    ref = Topography()
+    ref.crop_extent = [_ORIGIN_X + 2, _ORIGIN_X + 7, _ORIGIN_Y + 2,
+                       _ORIGIN_Y + 7]
+    ref.coarsen = 2
+    ref.read(str(tt2_path), topo_type=2)
+
+    t = Topography()
+    t.crop_extent = list(ref.crop_extent)
+    t.coarsen = 2
+    t.buffer = 1
+    t.read(str(tt2_path), topo_type=2)
+
+    # One extra coarsened point on each side of each axis.
+    assert t.x.size == ref.x.size + 2
+    assert t.y.size == ref.y.size + 2
+    assert t.Z.shape == (ref.Z.shape[0] + 2, ref.Z.shape[1] + 2)
+    # Coarsening is unchanged by the buffer: still every 2nd native point.
+    assert float(t.x[1] - t.x[0]) == pytest.approx(2.0 * _DELTA)
+    # And the buffered window still contains the unbuffered one.
+    assert float(t.x[0]) == pytest.approx(float(ref.x[0]) - 2.0 * _DELTA)
