@@ -1122,3 +1122,289 @@ def test_full_basin_sweep():
     assert len(shared) > 20, "the two archives should share most of Ike's track"
     assert np.allclose(ike_hurdat.eye_location[h_index],
                        ike_ibtracs.eye_location[i_index], atol=0.11)
+
+    # ...and on the quadrant wind radii, where both reported one.  Three
+    # archives (with the ATCF fixture, offline) agreeing on all twelve radii is
+    # what makes `wind_radii` trustworthy rather than merely well-shaped.
+    h_radii = ike_hurdat.wind_radii[h_index]
+    i_radii = ike_ibtracs.wind_radii[i_index]
+    both = np.isfinite(h_radii) & np.isfinite(i_radii) & (h_radii > 0)
+    assert both.sum() > 50, "expected many coincident reported radii"
+    assert np.allclose(h_radii[both], i_radii[both], rtol=0, atol=1.0)
+
+    # HURDAT2 gained a radius of maximum wind with the 2021 season.  Confirm it
+    # against IBTrACS `usa_rmw`, which is the independent evidence for its
+    # meaning and units (nautical miles) -- the format PDF is not machine
+    # readable, so this cross-check is the provenance.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        modern = {t.name: t for t in iter_hurdat(hurdat_path,
+                                                 years=range(2021, 2026))}
+        compared = 0
+        for track in iter_ibtracs(ibtracs_path, basin="NA",
+                                  years=range(2021, 2026)):
+            other = modern.get(track.name)
+            if other is None:
+                continue
+            shared, i_ix, h_ix = np.intersect1d(track.t, other.t,
+                                                return_indices=True)
+            mine = track.max_wind_radius[i_ix]
+            theirs = other.max_wind_radius[h_ix]
+            usable = np.isfinite(mine) & np.isfinite(theirs)
+            assert np.allclose(mine[usable], theirs[usable], rtol=0, atol=1.0)
+            compared += int(usable.sum())
+    assert compared > 1000, f"only {compared} records compared"
+
+
+# ---------------------------------------------------------------------------
+# Quadrant wind radii, standardized vocabularies, dtype widths
+# ---------------------------------------------------------------------------
+
+_MATURE_HURDAT = "hurdat_ike_mature.txt"
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_quadrant_radii_agree_across_archives():
+    """ATCF and HURDAT2 report the same quadrant radii for the same storm.
+
+    Both are NHC best track for Hurricane Ike (2008), read by two independent
+    parsers, so coincident times must agree exactly.  This is the check that
+    gives the new `wind_radii` field its meaning -- a shape/plumbing test would
+    pass just as well with the quadrants transposed or the thresholds swapped.
+    """
+    pytest.importorskip("pandas")
+    from clawpack.geoclaw.met.track import iter_hurdat
+
+    atcf = StormTrack.read_atcf(_storm_input_path("atcf"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        hurdat = next(iter_hurdat(_storm_input_path("hurdat").parent
+                                  / _MATURE_HURDAT))
+
+    shared, atcf_index, hurdat_index = np.intersect1d(
+        atcf.t.to_numpy().astype("datetime64[s]"),
+        hurdat.t, return_indices=True)
+    assert len(shared) >= 8, "the fixtures should overlap in Ike's mature stage"
+
+    a = atcf.wind_radii[atcf_index]
+    h = hurdat.wind_radii[hurdat_index]
+    # Compare where both reported something; ATCF maps an unavailable quadrant
+    # to NaN while HURDAT2 keeps a real zero, so only the reported overlap is
+    # comparable (see the StormTrack docstring).
+    both = np.isfinite(a) & np.isfinite(h)
+    assert both.sum() > 50, "expected many coincident reported radii"
+    assert np.allclose(a[both], h[both], rtol=0, atol=1.0)
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_quadrant_radii_shape_and_ordering():
+    """Radii shrink as the wind threshold rises, and RMW is inside r34."""
+    pytest.importorskip("pandas")
+    from clawpack.geoclaw.met.track import iter_hurdat
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        track = next(iter_hurdat(_storm_input_path("hurdat").parent
+                                 / _MATURE_HURDAT))
+
+    assert track.wind_radii.shape == (len(track.t), 3, 4)
+    assert track.wind_radii_thresholds.shape == (3,)
+    # 34 / 50 / 64 kt in m/s, increasing.
+    assert (np.diff(track.wind_radii_thresholds) > 0).all()
+
+    # A higher wind threshold cannot extend further than a lower one.
+    for j in range(track.wind_radii.shape[1] - 1):
+        lower, higher = track.wind_radii[:, j, :], track.wind_radii[:, j + 1, :]
+        both = np.isfinite(lower) & np.isfinite(higher) & (higher > 0)
+        assert (higher[both] <= lower[both] + 1.0).all()
+
+    # Where an RMW is reported it must sit inside the 34-kt envelope.
+    r34 = np.nanmean(np.where(track.wind_radii[:, 0, :] > 0,
+                              track.wind_radii[:, 0, :], np.nan), axis=1)
+    known = np.isfinite(track.max_wind_radius) & np.isfinite(r34)
+    if known.any():
+        assert (track.max_wind_radius[known] <= r34[known]).all()
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_hurdat_zero_radius_is_data_but_sentinel_is_not():
+    """HURDAT2 distinguishes a zero radius from an unknown one; keep both.
+
+    A weak system has no 34-kt winds, so their radius is genuinely zero -- which
+    is different from ``-999``.  Locking this against a future refactor that
+    treats `<= 0` as missing.
+    """
+    from clawpack.geoclaw.met.track import iter_hurdat
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        genesis = StormTrack.read_hurdat(_storm_input_path("hurdat"))
+        mature = next(iter_hurdat(_storm_input_path("hurdat").parent
+                                  / _MATURE_HURDAT))
+
+    # The bundled fixture is Ike's 30-kt genesis: all twelve fields are 0.
+    assert np.isfinite(genesis.wind_radii).all()
+    assert (genesis.wind_radii == 0.0).all()
+
+    # The mature fixture has real radii and -999 for its (pre-2021) RMW.
+    assert (mature.wind_radii[:, 0, :] > 0).any()
+    assert np.isnan(mature.max_wind_radius).all()
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_hurdat_radius_of_maximum_wind_field():
+    """HURDAT2's field 21 is an RMW in nautical miles, added for 2021 onward.
+
+    Verified against IBTrACS ``usa_rmw``: 2676 of 2676 coincident 2021-2025
+    North Atlantic records agree exactly when read as nautical miles.  Older
+    revisions end the line at 20 fields, which must read as missing rather than
+    raising.
+    """
+    from clawpack.geoclaw.met.track import iter_hurdat
+
+    # A synthetic 2021-style record with field 21 = 15 nmi.
+    modern = ("AL012021,          SYNTHTC,    1,\n"
+              "20210801, 0000,  , HU,  25.0N,  80.0W,  90,  960,"
+              "  120,  100,   75,  120,   60,   50,   40,   50,"
+              "   30,   25,   20,   25,   15,\n")
+    import tempfile
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "modern.txt"
+        path.write_text(modern)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            track = next(iter_hurdat(path))
+    expected = 15 * 1852.0
+    assert np.isclose(track.max_wind_radius[0], expected, atol=1.0)
+
+    # The bundled fixture predates the column and must still read.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        legacy = StormTrack.read_hurdat(_storm_input_path("hurdat"))
+    assert np.isnan(legacy.max_wind_radius).all()
+
+
+@pytest.mark.python
+@pytest.mark.storm
+@pytest.mark.parametrize("file_format,expected", [
+    ("hurdat", {"LO"}), ("atcf", {"TD", "TS", "HU", "EX"}),
+    ("jma", None), ("tcvitals", None)])
+def test_classification_is_not_truncated(file_format, expected):
+    """``np.empty(n, dtype=str)`` is ``<U1``; multi-character codes were cut.
+
+    HURDAT2's ``"LO"`` became ``"L"`` -- colliding with the landfall *event*
+    code -- and JMA/tcvitals lost their codes the same way.  Asserted on content
+    rather than dtype, since ATCF's classification comes back from pandas as
+    object dtype (and, separately, with the source's leading whitespace).
+    """
+    pytest.importorskip("pandas")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        reader = getattr(StormTrack, f"read_{file_format}")
+        track = reader(_storm_input_path(file_format))
+
+    assert track.classification is not None
+    codes = {str(code).strip()
+             for code in np.atleast_1d(track.classification)}
+    if expected is not None:
+        assert expected <= codes, f"got {sorted(codes)}"
+        # The point of the fix: nothing was cut to a single character.
+        assert all(len(code) > 1 for code in expected & codes)
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_hurdat_event_and_classification_stay_distinct():
+    """A landfall event ``"L"`` and a low classification ``"LO"`` are different."""
+    record = ("AL011990,          SYNTHTC,    2,\n"
+              "19900801, 0000, L, LO,  25.0N,  80.0W,  30, 1005,"
+              + "    0," * 12 + " -999,\n"
+              "19900801, 0600,  , TS,  25.5N,  80.5W,  40, 1000,"
+              + "    0," * 12 + " -999,\n")
+    import tempfile
+    from clawpack.geoclaw.met.track import iter_hurdat
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "codes.txt"
+        path.write_text(record)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            track = next(iter_hurdat(path))
+
+    assert track.event[0] == "L"
+    assert track.classification[0] == "LO"
+    assert track.classification[1] == "TS"
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_standardized_vocabularies():
+    """Basin and status map onto enums across each format's own vocabulary."""
+    from clawpack.geoclaw.met.track import (Basin, StormStatus,
+                                            standardize_basin,
+                                            standardize_status)
+
+    # The same physical basin, spelled three ways by three archives.
+    assert standardize_basin("AL", "atcf") is Basin.NORTH_ATLANTIC
+    assert standardize_basin("AL", "hurdat") is Basin.NORTH_ATLANTIC
+    assert standardize_basin("NA", "ibtracs") is Basin.NORTH_ATLANTIC
+    assert standardize_basin("L", "tcvitals") is Basin.NORTH_ATLANTIC
+
+    assert standardize_status("TS") is StormStatus.TROPICAL_STORM
+    assert standardize_status("lo") is StormStatus.LOW
+    # An unrecognized code degrades rather than stopping a read.
+    assert standardize_basin("ZZ") is Basin.UNKNOWN
+    assert standardize_status("ZZZ") is StormStatus.UNKNOWN
+    assert standardize_basin(None) is Basin.UNKNOWN
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_track_exposes_standardized_accessors():
+    """The string attributes are unchanged; the enums are reached separately."""
+    pytest.importorskip("pandas")
+    from clawpack.geoclaw.met.track import Basin, StormStatus
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        track = StormTrack.read_hurdat(_storm_input_path("hurdat"))
+
+    # Source vocabulary preserved...
+    assert track.basin == "Atlantic"
+    assert track.basin_code == "AL"
+    assert track.classification[0] == "LO"
+    # ...and the canonical value available alongside it.
+    assert track.basin_standard() is Basin.NORTH_ATLANTIC
+    assert track.status()[0] is StormStatus.LOW
+
+
+@pytest.mark.python
+@pytest.mark.storm
+def test_plot_swath_tolerates_missing_radius():
+    """A track with no outer radius plots without a swath instead of raising.
+
+    HURDAT2 supplies no storm radius at all, so ``plot(plot_swath=True)`` used
+    to feed NaN straight into a matplotlib patch.
+    """
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        track = StormTrack.read_hurdat(_storm_input_path("hurdat"))
+    assert np.isnan(track.storm_radius).all()
+
+    figure, ax = plt.subplots()
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            track.plot(ax, plot_swath=True)
+        assert any("swath is not drawn" in str(w.message) for w in caught)
+        # An explicit radius still draws.
+        track.plot(ax, plot_swath=True, radius=100e3)
+    finally:
+        plt.close(figure)

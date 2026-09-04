@@ -181,7 +181,13 @@ class ParametricMetForcing(object):
 
         # If a filling function is not provided we will provide some defaults.
         # setdefault, not update: a caller-supplied storm_radius fill must win.
-        fill_dict.setdefault("storm_radius", lambda t, storm: 500e3)
+        #
+        # Same value as the anonymous 500e3 constant this replaces, now named
+        # and documented in met.reconstruction; imported lazily to keep the
+        # import graph acyclic (reconstruction imports nothing from here, but
+        # this keeps it that way).
+        from clawpack.geoclaw.met import reconstruction
+        fill_dict.setdefault("storm_radius", reconstruction.roci_climatology)
         # Handle older interface that had specific fill functions
         if "max_wind_radius_fill" in kwargs.keys():
             fill_dict.update(

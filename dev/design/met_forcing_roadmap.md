@@ -34,10 +34,16 @@ written verbatim (a regression against v5.9.0, whose writer checked `== -1`).
 **That is now also done** (S4-prerequisite, below): the missing-value contract is
 unified on NaN and `test_storm_io[ibtracs]` is no longer `xfail`. **Multi-storm
 ingestion is also done** (**S5**, new — `iter_hurdat` / `iter_ibtracs` /
-`iter_atcf` plus `catalog_*` indices). Next is **S3 proper** (quadrant radii,
-`Basin`/`StormStatus` enums, the remaining `<U1` truncations), then **S4**
-(`met/reconstruction.py` — needed because RMW is observed at only 55% of North
-Atlantic 1980-2025 track points and never by HURDAT2).
+`iter_atcf` plus `catalog_*` indices), and so is **S3** (quadrant radii,
+`Basin`/`StormStatus` enums, the remaining `<U1` truncations, and HURDAT2's
+post-2021 RMW column). **S4's module and test harness are done too**
+(`met/reconstruction.py`) — but its regression *coefficients* are deliberately
+unshipped and await maintainer transcription from the papers, so S4 is the one
+open short-term item. It is still needed despite the HURDAT2 RMW find: RMW is
+reported at only **55%** of North Atlantic 1980–2025 IBTrACS track points and
+just **0.4%** in the 1980s–90s, so most of a 45-year ensemble has no reported
+storm geometry. With the whole short-term list closed, the next substantial item
+is the **M1 parametric generator** (kernel territory, currently pinned).
 
 ## Context
 
@@ -132,19 +138,67 @@ Delivered on branch `met-deprefix-gridded`.
     fixed, and the `aux_owi` + isaac `owi_ascii` gauge goldens regenerated. Note:
     `test_isaac.py`'s OWI coordinate reconstruction was updated to match.
 
-- **S3. Harvest low-risk track-reader improvements** into `met/track.py`
-  (do **not** adopt a parallel `CycloneDataset` object model): quadrant wind-radii
-  (`r34/r50/r64` × NE/SE/SW/NW), and `Basin`/`StormStatus` enums + standardization
-  maps. Port ideas, re-verify against real files, keep `StormTrack` as the single
-  home.
+- **S3. Harvest low-risk track-reader improvements — ✅ DONE (PR #NNN, verified
+  against `8f0984d8`).** Quadrant wind radii, `Basin`/`StormStatus` enums, the
+  remaining `<U1` truncations, and the plot-swath guard. No parallel
+  `CycloneDataset`: everything hangs off `StormTrack`.
+  - **`wind_radii`** — shape `(n_times, n_thresholds, 4)` in metres, last axis
+    NE/SE/SW/NW, middle axis matching `wind_radii_thresholds` (34/50/64 kt as
+    m/s). Read for ATCF, HURDAT2 **and** IBTrACS. **Verification is
+    cross-archive agreement, not shape:** all three archives report *identical*
+    radii at Hurricane Ike's peak record — 34 kt `[213.0, 185.2, 166.7, 222.2]`
+    km, 50 kt `[138.9, 92.6, 74.1, 111.1]`, 64 kt `[55.6, 46.3, 37.0, 46.3]` —
+    through three independent parsers. A plumbing test would pass equally well
+    with the quadrants transposed or the thresholds swapped; this would not.
+    Plus invariants: radii shrink as the threshold rises, and a reported RMW sits
+    inside the 34-kt envelope.
+  - **Zero is data in HURDAT2 and missing in ATCF, and that asymmetry is real.**
+    HURDAT2 has an explicit `-999`, so a zero quadrant radius there is a genuine
+    zero (a weak system has no 34-kt winds); ATCF leaves an unavailable quadrant
+    as `0`, indistinguishable from a real zero, so those become `NaN` — matching
+    how this reader already treats ATCF's other radius fields. `wind_radii` is
+    therefore self-consistent under "NaN means not reported"; documented on
+    `StormTrack` and locked by a test.
+  - **HURDAT2 carries a radius of maximum wind after all.** Field 21, added with
+    the **2021 season** (100% populated 2021–2025, absent before — a handful of
+    2018–2020 records), now read into `max_wind_radius`. Its meaning and units
+    were established empirically rather than from the format PDF (which is not
+    machine-readable): **2,676 of 2,676** coincident 2021–2025 North Atlantic
+    records match IBTrACS `usa_rmw` *exactly* when read as nautical miles, max
+    difference 0.000 m. This corrects the standing claim that HURDAT2 never
+    supplies RMW — true for 1851–2020, false since. Pre-2021 revisions end the
+    line at 20 fields, so `_sentinel_to_nan` now also treats an empty field as
+    missing.
+  - **`Basin` / `StormStatus` enums** plus `standardize_basin(code, source)` /
+    `standardize_status(code)`, folding in `ATCF_basins`, `TCVitals_Basins`,
+    `TC_designations` and IBTrACS's own codes. Added **alongside** the existing
+    strings, reached via `basin_code`, `basin_standard()` and `status()`:
+    `_STATE_FIELDS` is an explicit tuple, so additive attributes cause zero
+    golden churn, whereas turning `basin` into an enum would have changed what
+    every reader reports and how it serializes. Unknown codes degrade to
+    `UNKNOWN` rather than raising.
+  - **`<U1` truncation** fixed for `read_jma` and `read_tcvitals` (HURDAT2's was
+    unavoidably fixed in S5). Asserted on content rather than dtype, because
+    ATCF's classification comes back from pandas as object dtype — and, noted in
+    passing, carries the source's leading whitespace (`' TD'`); `standardize_status`
+    strips, so the enums are unaffected.
+  - **`StormTrack.plot(plot_swath=True)`** masks non-finite and non-positive
+    radii instead of feeding them to a matplotlib patch, and warns once when
+    nothing is drawable. HURDAT2 supplies no outer radius at all, so this was
+    reachable from a plain `read_hurdat` + `plot`.
+  - **Zero existing goldens regenerated.** The ATCF quadrant pivot is
+    deliberately a *separate* pass over the pre-`groupby` frame
+    (`_atcf_quadrant_radii`), leaving the legacy pipeline untouched, because
+    `atcf_geoclaw.txt` is the golden a mistake there would have moved silently.
+    One new fixture, `tests/data/storm/hurdat_ike_mature.txt` (12 real
+    mature-stage Ike records, NOAA/AOML public domain) — the bundled
+    `hurdat.txt` is all genesis-stage zeros, so without it the offline
+    cross-archive check would have had no content.
   - *The original "…and an IBTrACS netCDF path if the current reader is CSV-only"
     clause was **stale** and has been struck: `read_ibtracs` has always been an
-    xarray/netCDF reader. Confirmed against the real `IBTrACS.NA.v04r01.nc`
-    (2,298 storms; dims `storm` / `date_time` / `quadrant`), which does carry the
-    `quadrant` dimension this item needs — only the bundled
-    `tests/data/storm/ibtracs.nc` fixture is a stripped single-storm slice without
-    it, so offline coverage of quadrant radii will need a new fixture or a
-    `remote` test.*
+    xarray/netCDF reader.* The bundled `ibtracs.nc` fixture lacks the `quadrant`
+    dimension, so IBTrACS quadrant coverage is `remote`-only
+    (`test_full_basin_sweep`), which also carries the RMW cross-check above.
 
 - **S3a. IBTrACS reader type/API hygiene — ✅ DONE (PR #NNN, verified against
   `7ef7a816`).** Prerequisite for S4: the fill path could not run at all, because
@@ -271,6 +325,145 @@ Delivered on branch `met-deprefix-gridded`.
   generator consumes complete parameter sets). Reference note (TC-radius section):
   *Rework TC Geometry Estimates* (vault project note).
 
+  - **Status: ✅ DONE (PR #NNN, verified against `8f0984d8`).**
+    `met/reconstruction.py` ships the estimator interface, the reporting, and
+    coefficients transcribed from the papers (maintainer-verified).
+    - **Willoughby Eq. (7a)**: `R_max = 46.4·exp(−0.0155·V_max + 0.0169·φ)`,
+      km / m/s / degrees, Atlantic. Recorded with its range of validity
+      (`valid_above_m_s = 26`) and a warn-once below it.
+    - **Vickery & Wadhera (2008)**: `ln R_max = 3.015 − 6.291e−5·Δp² +
+      0.0337·ψ`, plus its three-branch heteroscedastic `σ_lnRMW`. Included
+      because it is pressure-driven and so usable where a wind is absent —
+      **not** as the weak-storm estimator; see below.
+    - **`rmw_sampled(estimator, sigma, seed)`** for propagating geometry
+      uncertainty. Opt-in and seed-required: the default path stays
+      deterministic so a storm is still a pure function of its track.
+  - **The input basis was the subtle part.** Eq. (7a) is fit to *maximum
+    azimuthally averaged flight-level* winds (850/700 hPa), which the paper
+    contrasts explicitly with HURDAT's 10 m 1-minute point maximum.
+    `to_willoughby_wind` performs both corrections. This also **confirms the
+    Fortran Willoughby path is on the right basis** — `adjust_max_wind`'s
+    boundary-layer division is a convention, not a bug.
+  - **But the Fortran over-corrects the asymmetry.** It subtracts the *full*
+    translation magnitude; the canonical reduction is ~0.5F at the RMW (Phadke
+    et al. 2003). Since (7a) is monotone decreasing in wind, over-subtraction
+    biases the reconstructed radius high. Python uses
+    `ASYMMETRY_FRACTION = 0.5`; over the 18,028 points needing a fill this
+    raises the median converted wind 16.3 → 20.1 m/s and drops the count driven
+    to zero from 267 to 9. **The Fortran is deliberately left alone** — changing
+    it moves every forward-model path (Holland included) and all their goldens.
+    The divergence is pinned by
+    `test_wind_conventions_versus_the_fortran` so it cannot become accidental.
+  - **Verification is skill against observation, not the reference file.** The
+    transcription cases in `reconstruction_reference.json` are computed *from*
+    the coefficients, so they check the functional form, not the constants; the
+    file says so. The real check is `test_skill_against_observed_rmw` (remote),
+    which holds out the 21,683 IBTrACS-NA points that report an RMW:
+
+    | | Willoughby (7a) | Vickery-Wadhera |
+    |---|---|---|
+    | ≥26 m/s (n≈8,600) | bias −3.2 km, MAE 12.4 km | +1.7 km, 15.2 km |
+    | <26 m/s (n≈13,000) | bias **−35.5 km** | **−42.0 km** |
+
+    A units or wind-convention error fails this immediately where it passes
+    every invariant.
+  - **Finding that overturned the plan: VW08 is the *worse* weak-storm
+    estimator**, despite being the obvious candidate. At the median 13 hPa
+    deficit its Δp² term contributes ~0.01, so it degenerates to a latitude-only
+    constant and cannot track weak-storm spread. Neither raw fit is usable below
+    ~26 m/s; the test asserts that limitation rather than describing it.
+    Downstream (`atlantic-rp`) applies an archive-calibrated variant there — a
+    calibration to one basin and one wind convention is a *study's* business, not
+    geoclaw's, so it deliberately does not live here.
+  - **`roci_climatology`** keeps 500 km, re-documented: `storm_radius` is the
+    centre of a 100 km `tanh` taper on wind *and* pressure, i.e. an
+    extent-of-forcing cutoff, not an ROCI. With `X1` ~250 km a
+    (`R_max` 40 km, `V_max` 50 m/s) storm still has ~8 m/s azimuthal-mean wind
+    at 500 km, so tapering at a physical NA ROCI (~350–400 km) would truncate
+    surge-relevant outer winds. A size-varying default should be
+    `ROCI + O(X1)`, not `ROCI`.
+  - **Scope narrowed on evidence.** Measured over IBTrACS v4 North Atlantic
+    1980–2025 (684 storms, 39,711 track points):
+
+    | Field | Reported | 1980s | 2020s |
+    |---|---|---|---|
+    | `max_wind_speed` | 100% | — | — |
+    | `central_pressure` | 95.9% | 78.1% | 100% |
+    | `max_wind_radius` | 54.6% | **0.4%** | 100% |
+    | `storm_radius` | 54.3% | 0.0% | 99.5% |
+
+    Two items were **dropped from the MVP** as a result:
+    - **`roci_from_r34` — dropped.** r34 is reported at 44.5% of points, but it
+      fills only **1,831 points (4.6%)** that ROCI itself does not — and
+      **zero** in the 1980s–90s, where r34 coverage is also 0.0%. A citation, a
+      code path and a test surface to cover 4.6% of the record, none of it in
+      the era that needs help.
+    - **Wind–pressure relationship — deferred to its own PR** (`wind_pressure`
+      is a declared `NotImplementedError` with the reasoning). It would recover
+      **1,682 of 41,427 points (4.1%)** that are dropped for want of a
+      pressure — 1,519 of them in the 1980s (21.9% of that decade), none after
+      1999. The literature review added a decisive practical objection: KZ07 and
+      CK09 both need *size* inputs (R34, or V₅₀₀ which CK09 estimates as
+      R34/9 − 3) and an environmental pressure, and for those 1980s points the
+      size inputs are themselves almost entirely absent. The implementation would
+      collapse to a climatological-V₅₀₀ fallback, i.e. a latitude- and
+      P_env-adjusted Dvorak-style relation. Revisit only if that 4.1% proves to
+      matter.
+  - **`roci_climatology` replaces the anonymous `500e3`** at
+    `parametric.py`'s `setdefault`. Same value, so nothing moves — what changes
+    is that the assumption is named, cited and overridable. Whether 500 km is
+    the right climatological median for the basin in use is flagged for
+    maintainer confirmation against Chavas et al. (2016); it is a science change,
+    not a refactor.
+  - **`rmw_constant(radius)`** is provided so a track can be made runnable
+    *today*, explicitly labelling its geometry an assumption rather than an
+    estimate, without waiting on the paper transcription. Downstream ensembles
+    are therefore unblocked; they just have to say what they assumed.
+  - **CI stays green; the guard is at runtime, not in a red test.** The earlier
+    plan for this item was to ship `reconstruction_reference.json` empty with a
+    `pytest.fail`, so "the PR cannot go green until a human opens the paper."
+    Changed deliberately: a permanently failing test on master is worse than
+    useless, and the runtime `CoefficientsNotTranscribed` is a *stronger*
+    guarantee — it prevents an unverified coefficient being **used**, not merely
+    merged. The reference test and the three Willoughby invariant tests skip
+    with an instruction naming the paper, and switch themselves on when the
+    coefficients land.
+  - **Verified:** `default_fill_dict()` with no arguments reproduces
+    `write_geoclaw`'s prior behaviour exactly (374 passed, **zero goldens
+    regenerated**); a sparse-ATCF round trip (RMW/ROCI stripped) yields a
+    7-column file with every row present, all values finite and both radii
+    positive, without mutating the caller's track; `coverage_report` on real data
+    takes a 1985 storm from **0/31 to 31/31 writable times**.
+  - **What the maintainer must confirm.** The RMW regression is **Eq. (7)** of
+    Willoughby et al. (2006) (maintainer-identified; the bibliographic record is
+    Crossref-verified, the equation attribution is not). Alongside the constants,
+    the reference JSON requires the basin, the published units, and **two
+    independent wind conventions** that no invariant test can check:
+    - *Reference height.* GeoClaw's Fortran `set_willoughby_fields` already
+      evaluates the paper's **Section 4** profile coefficients (`n`, `X1`, `A`)
+      on a **gradient-level** wind — `adjust_max_wind` subtracts translation
+      speed then divides by `atmos_boundary_layer = 0.9`. If Eq. (7) shares that
+      fitting basis the Python estimator must match it; a ~11% `Vmax`
+      difference otherwise.
+    - *Averaging period.* The Fortran treats storm-file winds as **1-minute**
+      (HURDAT2 / ATCF / IBTrACS `usa_wind`) and converts to 10-minute on output
+      via `sampling_time = 0.88`; SLOSH is the one model that also applies it
+      upstream, because its own fit assumes 10-min. Willoughby & Rahn Part I
+      (2004) evaluates against HURDAT 1-minute winds, which *suggests* but does
+      not state the Part II convention. Wrong choice ⇒ ~12% `Vmax` error.
+
+    **The same reading also settles a question about the existing Fortran.** If
+    Eq. (7) and the Section 4 coefficients are both fit to 10 m 1-minute winds,
+    then the boundary-layer division before applying `n`/`X1`/`A` is an
+    unintended bias rather than a convention — worth checking while the paper is
+    open, and reporting separately if so. Nothing in the Python can determine
+    this. *(Noted also for Chavas et al. 2016: it works in 10 m winds but does
+    not state an averaging period; that matters less here, since ROCI is used
+    only as a climatological constant, not a wind-dependent regression.)*
+  - **Provenance constraint restated:** these estimators exist in CLIMADA
+    (GPL-3) and other copyleft TC toolkits. Nothing may be copied or adapted
+    into this BSD tree — transcribe from the papers only.
+
 - **S5. Multi-storm archive ingestion — ✅ DONE (PR #NNN, verified against
   `25ec8abc`).** HURDAT2 and IBTrACS both distribute *one file per basin holding
   every storm on record* (2,004 Atlantic storms / 55,605 records; 2,298 IBTrACS
@@ -337,6 +530,47 @@ Delivered on branch `met-deprefix-gridded`.
   - *Note for whoever writes NaN-bearing test comparisons:* `_storm_state`
     dictionaries cannot be compared with `==`, because `nan != nan`. Compare
     `_dumps(...)` text, as the characterization tests do.
+
+- **S6. Fortran Willoughby `X1` uses the wrong regression family — OPEN
+  (found 2026-09-04, flagged not patched).** Willoughby et al. (2006) gives two
+  dual-exponential regression families: Eqs. (10a–c) predict from `V_max` and
+  latitude, Eqs. (11a–c) add `ln(R_max)` as a predictor. They are not
+  term-by-term interchangeable — in (10) the variance that would load on
+  `ln(R_max)` instead loads on `V_max` and latitude through their correlations.
+
+  `set_willoughby_fields` mixes them:
+
+  | param | in `parametric_met_forcing_module.f90` | matches | verdict |
+  |---|---|---|---|
+  | `n` | `2.134 + 0.0077 V − 0.4522 ln(R) − 0.0038 φ` | Eq. (11b) | ✓ |
+  | `A` | `0.5913 + 0.0029 V − 0.1361 ln(R) − 0.0042 φ` | Eq. (11c) | ✓ |
+  | `X1` | `317.1 − 2.026 V + 1.915 φ` | **Eq. (10a)** | ✗ |
+
+  So `n` and `A` use the observed `R_max` while the outer decay length alone
+  discards it. Correct form:
+
+  ```fortran
+  X1 = (287.6d0 - 1.942d0*mod_mws + 7.799d0*log(mwr/1.d3) + 1.819d0*abs(sloc(2))) * 1.d3
+  ```
+
+  **Measured impact, so the goldens cost is known before anyone touches it.**
+  Over the 21,683 IBTrACS-NA points with a reported `R_max`: median change
+  **+2.8 km** on an `X1` of ~330 km, 5th–95th percentile −5 to +10 km, maximum
+  20 km, and no point exceeds 20 km. Direction is as the mechanism predicts
+  (compact storms −3.8 km, large storms +8.6 km) but the magnitude is
+  low-single-digit percent, because `7.799·ln(R_max)` spans only ~11 km across
+  the observed size range while the intercept difference (317.1 vs 287.6) partly
+  offsets the slope changes. **The bug is real and the fix is cheap; it is not
+  urgent.**
+
+  Kernel territory (a wind model), so flagged for the maintainer rather than
+  patched. Pinned by
+  `test_reconstruction.py::test_fortran_willoughby_x1_regression_family_is_pinned`,
+  which fails when the fix lands and points here.
+
+  Cleared as *non*-bugs in the same routine: `X2 = 25 km` is correct, and the
+  0.9/1.1·`R_max` transition band is a documented simplification of solving
+  Eq. (3) for ξ, not an error.
 
 ### MEDIUM TERM
 
