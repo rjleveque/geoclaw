@@ -31,3 +31,7 @@ __pycache__
 
 # macOS
 *.DS_Store
+
+# Ephemeral, per-task developer scratch is kept in .plans/ (ignored via the
+# global git excludesfile, not this file). Durable, reviewable design docs live
+# in the tracked dev/design/ directory instead -- see dev/design/README.md.
