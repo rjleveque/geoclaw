@@ -24,6 +24,7 @@ from clawpack.geoclaw.met.track import Track, StormTrack  # noqa: F401
 from clawpack.geoclaw.met.track import (  # noqa: F401
     iter_hurdat, iter_ibtracs, catalog_hurdat, catalog_ibtracs)
 from clawpack.geoclaw.met.tools import iter_atcf  # noqa: F401
+from clawpack.geoclaw.met import reconstruction  # noqa: F401
 from clawpack.geoclaw.met.parametric import ParametricMetForcing  # noqa: F401
 from clawpack.geoclaw.met.gridded import GriddedMetForcing  # noqa: F401
 from clawpack.geoclaw.met.data_storms import OWIData  # noqa: F401
@@ -33,6 +34,7 @@ __all__ = [
     'Storm', 'Track', 'StormTrack',
     'iter_atcf', 'iter_hurdat', 'iter_ibtracs',
     'catalog_hurdat', 'catalog_ibtracs',
+    'reconstruction',
     'ParametricMetForcing', 'GriddedMetForcing', 'OWIData',
     'SurgeData', 'MetData',
     'construct_fields', 'available_formats', 'available_models',
