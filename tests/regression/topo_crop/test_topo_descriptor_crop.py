@@ -280,3 +280,137 @@ def test_descriptor_crop_inside_window_runs_either_way(
     xll, xhi, yll, yhi, _mx, _my = _topo_window(tmp_path)
     assert (xll, xhi, yll, yhi) == pytest.approx(
         (CROP[0], CROP[1], CROP[2], CROP[3]))
+
+
+# ===========================================================================
+# Antimeridian: two entries for one file, with different lon_wrap_offset
+#
+# This is the end-to-end wrap.  Nothing had ever fed GeoClaw two descriptor
+# entries pointing at the same file with different lon_wrap_offset values --
+# the Python side was tested, and the Fortran side was assumed.
+# ===========================================================================
+
+# A global file so a crop can genuinely run off its longitude extent.
+WRAP_TOPO_X = (-180.0, 180.0)
+WRAP_TOPO_Y = (-40.0, 0.0)
+WRAP_DELTA = 0.25
+
+# Continuous-coordinate crop spanning the seam: covered by 170..180 (offset
+# -360) plus -180..-150 (offset 0).
+WRAP_CROP = (-190.0, -150.0, -30.0, -10.0)
+
+
+def _write_global_nc(path):
+    """A CF-compliant global NetCDF topo file spanning the antimeridian.
+
+    Depth varies with longitude so the two sides of the seam carry visibly
+    different values; a constant field would hide a mis-stitched join.
+    """
+    netCDF4 = pytest.importorskip("netCDF4")
+
+    x = np.arange(WRAP_TOPO_X[0], WRAP_TOPO_X[1] + 1e-9, WRAP_DELTA)
+    y = np.arange(WRAP_TOPO_Y[0], WRAP_TOPO_Y[1] + 1e-9, WRAP_DELTA)
+    Z = -3000.0 + 10.0 * np.cos(np.radians(x))[None, :] * np.ones((y.size, 1))
+
+    with netCDF4.Dataset(path, 'w') as ds:
+        ds.createDimension('lon', x.size)
+        ds.createDimension('lat', y.size)
+        v = ds.createVariable('lon', 'f8', ('lon',))
+        v[:] = x
+        v.units = 'degrees_east'
+        v.standard_name = 'longitude'
+        v = ds.createVariable('lat', 'f8', ('lat',))
+        v[:] = y
+        v.units = 'degrees_north'
+        v.standard_name = 'latitude'
+        v = ds.createVariable('elevation', 'f8', ('lat', 'lon'))
+        v[:] = Z
+        v.units = 'm'
+        v.standard_name = 'height_above_mean_sea_level'
+        v.positive = 'up'
+        ds.Conventions = 'CF-1.8'
+    return path
+
+
+def _run_wrapped(tmp_path, prebuilt, domain, buffer=0):
+    """Set up and run a case whose topo.data has two wrapped entries."""
+    nc_path = tmp_path / "global.nc"
+    _write_global_nc(nc_path)
+
+    runner = gtest.GeoClawTestRunner(tmp_path, test_path=testdir)
+    runner.set_data()
+    cd = runner.rundata.clawdata
+    cd.lower = [domain[0], domain[2]]
+    cd.upper = [domain[1], domain[3]]
+    cd.num_cells = [20, 12]
+    runner.write_data()
+
+    # Written the way a user would: one Topography with a continuous
+    # cross-seam crop.  The writer expands it into two descriptor entries.
+    topo = topotools.Topography()
+    topo.path = str(nc_path)
+    topo.topo_type = 4
+    topo.crop_extent = list(WRAP_CROP)
+    topo.buffer = buffer
+
+    td = TopographyData()
+    td.topofiles = [topo]
+    td.write(out_file=str(tmp_path / "topo.data"))
+
+    text = (tmp_path / "topo.data").read_text()
+    assert text.count("lon_wrap_offset") == 2, (
+        f"expected two wrapped entries, got:\n{text}")
+
+    shutil.copy(prebuilt, tmp_path / runner.executable_name)
+    (tmp_path / "_output").mkdir(exist_ok=True)
+    proc = subprocess.run([str(tmp_path / runner.executable_name)],
+                          cwd=tmp_path, capture_output=True, text=True)
+    (tmp_path / "run.log").write_text(proc.stdout + proc.stderr)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+@pytest.mark.netcdf
+def test_wrapped_entries_cover_a_cross_seam_domain(tmp_path, netcdf_xgeoclaw):
+    """A domain straddling the antimeridian is covered by the two entries.
+
+    The domain sits at -185..-155 in continuous coordinates, i.e. it spans the
+    date line.  Neither entry covers it alone: the offset-0 entry supplies
+    -180..-150 and the offset -360 entry supplies -190..-180 by reading the
+    file's 170..180 strip.  If Fortran ignored lon_wrap_offset, or applied it
+    before selecting on crop_bounds, the west half would be missing and the
+    coverage check would fail.
+    """
+    domain = (-185.0, -155.0, -28.0, -12.0)
+    rc, out = _run_wrapped(tmp_path, netcdf_xgeoclaw, domain)
+
+    assert "topo arrays do not cover domain" not in out, (
+        f"the wrapped pair did not cover a cross-seam domain.\n{out}")
+    assert rc == 0, out
+
+
+@pytest.mark.netcdf
+def test_wrapped_entries_report_shifted_extents(tmp_path, netcdf_xgeoclaw):
+    """Both entries must be reported in *domain* coordinates.
+
+    fort.geo records each topo grid after lon_wrap_offset is applied, so the
+    wrapped entry has to appear west of -180 rather than at its file position
+    of +170.  Seeing +170 here would mean the offset never reached the grid.
+    """
+    domain = (-185.0, -155.0, -28.0, -12.0)
+    _run_wrapped(tmp_path, netcdf_xgeoclaw, domain)
+
+    text = (tmp_path / "fort.geo").read_text()
+    windows = re.findall(
+        r"mx\s*=\s*\d+\s+x\s*=\s*\(\s*([-\d.E+]+)\s*,\s*([-\d.E+]+)\s*\)",
+        text)
+    assert len(windows) == 2, f"expected two topo grids in fort.geo:\n{text}"
+
+    lows = sorted(float(lo) for lo, _hi in windows)
+    highs = sorted(float(hi) for _lo, hi in windows)
+    # Wrapped entry shifted to -190..-180; unwrapped entry at -180..-150.
+    assert lows[0] == pytest.approx(-190.0)
+    assert highs[-1] == pytest.approx(-150.0)
+    # Nothing left sitting at its unshifted file position.
+    assert all(float(hi) < 0.0 for _lo, hi in windows), (
+        f"an entry kept its file longitude instead of the domain one: "
+        f"{windows}")

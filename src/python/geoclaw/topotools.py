@@ -535,26 +535,37 @@ class Topography(object):
     most antimeridian confusion, so it is worth being concrete about the three
     cases:
 
-    1. **Wrapped spelling, e.g. ``crop_extent=[170, -170, ...]``.**  Rejected
-       with a ``ValueError``.  There is no ascending window it could mean, and
-       silently producing an empty grid (which is what a descending pair used
-       to do) is worse than refusing.
+    1. **Ordinary ascending crop inside the file.**  The common case; nothing
+       special happens.
 
     2. **Continuous spelling, e.g. ``crop_extent=[-211, -99, ...]`` for a file
-       on ``[-180, 180]``.**  Accepted, but the part that lies off the file is
-       *clipped, not wrapped* -- you get ``[-180, -99]`` and a
-       ``UserWarning`` saying so.  It is a legitimate way to say "as far west
-       as this file goes"; it is not a way to cross the seam.
+       on ``[-180, 180]``.**  What this means depends on where it is used, and
+       the two answers are different on purpose:
 
-    3. **Genuinely crossing the seam.**  Not expressible on a single
-       ``Topography``, and not expressible in a single ``topo.data`` entry
-       either.  Use :meth:`netcdf_utils.TopoInspector.topo_entries`, which
-       returns one entry per side of the cut with the appropriate
-       ``lon_wrap_offset`` and file-coordinate ``crop_bounds``; append those to
-       ``rundata.topo_data.topofiles``.  Writing a descending ``crop_extent``
-       to ``topo.data`` directly raises, because Fortran would resolve
-       ``crop_bounds = 170.0 -170.0`` to ``mx=0, my=0``: an empty topography,
-       with no error.
+       - **Reading into a Topography** (``read``, ``crop``): the part that lies
+         off the file is *clipped, not wrapped* -- you get ``[-180, -99]`` and
+         a ``UserWarning`` saying so.  An in-memory ``Topography`` is one
+         ascending array; it has nowhere to put the wrapped part.
+       - **Writing to ``topo.data``** (``TopographyData.write``): the crop is
+         *split across the seam*.  The writer emits one entry per side, each
+         with its own ``lon_wrap_offset`` and file-coordinate ``crop_bounds``,
+         and Fortran reassembles them into a single continuous region.
+
+       So a cross-seam crop works from ordinary setrun code -- set
+       ``crop_extent`` and append the ``Topography`` -- with no descriptor
+       handling by the caller.  ``buffer``, ``coarsen``, ``align`` and the
+       shifts are carried onto every entry.
+
+    3. **Wrapped spelling, ``crop_extent=[170, -170, ...]``.**  Rejected
+       wherever it appears, including at ``topo.data`` write time: Fortran
+       would resolve ``crop_bounds = 170.0 -170.0`` to ``mx=0, my=0`` -- an
+       empty topography, with no error.  Use the continuous spelling
+       (``[-190, -170]``), which case 2 handles.
+
+    :meth:`netcdf_utils.TopoInspector.topo_entries` is the underlying
+    machinery, and is still available if you want the entries directly; the
+    writer now calls it for you.  Latitude is never wrapped -- a crop whose
+    latitude runs off the file is an error, since there is no seam to cross.
 
     The general shape of it: **Python is the single-rectangle case; the wrap
     lives in the Fortran interface.**  The same split explains why
