@@ -932,7 +932,7 @@ def kml_timespan(t1,t2,event_time=None,tz=None,tscale=1):
 
     return timestrbegin,timestrend
 
-def topo2kml(topo_file_name, topo_type, color='00FF00'):
+def topo2kml(topo_file_name, topo_type, color='00FF00', crop_extent=None):
     """
     Create a kml file putting a box around the region covered by a topofile.
     Color is green by default.
@@ -940,9 +940,15 @@ def topo2kml(topo_file_name, topo_type, color='00FF00'):
 
     import os
     from clawpack.geoclaw import topotools
-    topo = topotools.Topography(topo_file_name, topo_type=topo_type)
+    topo = topotools.Topography()
+    topo.path = topo_file_name
+    topo.topo_type = topo_type
     topo.read_header()
-    xy = topo.extent
+    if crop_extent is not None:
+        xy = crop_extent
+    else:
+        xy = topo.extent
+    print('+++ zy = ', xy)
     name = os.path.splitext(os.path.split(topo_file_name)[-1])[0]
     file_name = '%s.kml' % name
     box2kml(xy, file_name, name, color)
@@ -1113,11 +1119,25 @@ def make_input_data_kmls(rundata=None, combined=False, dtopo_contours=False):
 
     topofiles = rundata.topo_data.topofiles
     for f in topofiles:
-        topo_file_name = f[-1]
-        topo_type = f[0]
+        # might be either old style list [topo_type, fname]
+        # or new style from 5.15.0, a topotools.Topography object
+        try:
+            topo_file_name = f[-1]
+            topo_type = f[0]
+            print('+++ Old style, topo_file_name = ',topo_file_name)
+            crop_extent = None
+        except:
+            topo = f  # should be type clawpack.geoclaw.topotools.Topography
+            #assert type(topo) is ???
+            topo_file_name = f.path
+            topo_type = f.topo_type
+            crop_extent = topo.crop_extent
+            print('+++ New style, topo_file_name = ',topo_file_name)
+            print('+++ crop_extent = ',crop_extent)
+
         if os.path.isfile(topo_file_name):
             try:
-                topo2kml(topo_file_name, topo_type)
+                kmltools.topo2kml(topo_file_name, topo_type, crop_extent=crop_extent)
             except:
                 print('*** problem reading topofile, proper topo_type?')
                 print('    ', topo_file_name)
