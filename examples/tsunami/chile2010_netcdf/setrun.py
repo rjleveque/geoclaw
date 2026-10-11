@@ -396,7 +396,18 @@ def setrun(claw_pkg='geoclaw'):
     topo = topotools.Topography()
     topo.path = topo_path
     topo.topo_type = 4  # netCDF
-    topo.crop_extent = domain_extent  # computational domain
+    #topo.crop_extent = domain_extent  # computational domain
+    topo.crop_extent = [-120,-80, -60, 0]
+    topo.buffer = 1  # buffer to make sure domain is covered
+    topo.coarsen = 20 # coarsen from 30 arcsec to 10 arcmin
+    topo_data.topofiles.append(topo)
+
+    # new style:
+    topo = topotools.Topography()
+    topo.path = topo_path
+    topo.topo_type = 4  # netCDF
+    #topo.crop_extent = domain_extent  # computational domain
+    topo.crop_extent = [-80,-50, -60, 0]
     topo.buffer = 1  # buffer to make sure domain is covered
     topo.coarsen = 20 # coarsen from 30 arcsec to 10 arcmin
     topo_data.topofiles.append(topo)
