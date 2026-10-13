@@ -67,7 +67,7 @@ def setrun(claw_pkg='geoclaw'):
     # Number of space dimensions:
     clawdata.num_dim = num_dim
 
-    domain_extent = (-190, -60, -60, 0)
+    domain_extent = (-120, -60, -60, 0)
     x_west, x_east, y_south, y_north = domain_extent  # unpack
 
     # Lower and upper edge of computational domain:
@@ -284,7 +284,7 @@ def setrun(claw_pkg='geoclaw'):
     amrdata.max1d = 60
 
     # max number of refinement levels:
-    amrdata.amr_levels_max = 1
+    amrdata.amr_levels_max = 3
 
     # List of refinement ratios at each level (length at least mxnest-1)
     amrdata.refinement_ratios_x = [2,6]
@@ -385,8 +385,8 @@ def setrun(claw_pkg='geoclaw'):
     topo_data = rundata.topo_data
     # for topography, append lines of the form
     #    [topotype, fname]
-    #topo_path = os.path.join(scratch_dir, 'etopo10min120W60W60S0S.asc')
-    #topo_data.topofiles.append([2, topo_path])
+    topo_path = os.path.join(scratch_dir, 'etopo10min120W60W60S0S.asc')
+    topo_data.topofiles.append([2, topo_path])
     
     # read directly from THREDDS server: (does not work)
     #topo_path = 'https://www.ngdc.noaa.gov/thredds/dodsC/global/ETOPO2022/30s/30s_bed_elev_netcdf/ETOPO_2022_v1_30s_N90W180_bed.nc'
@@ -459,4 +459,4 @@ if __name__ == '__main__':
     rundata = setrun(*sys.argv[1:])
     rundata.write()
 
-    #kmltools.make_input_data_kmls(rundata)
+    kmltools.make_input_data_kmls(rundata)

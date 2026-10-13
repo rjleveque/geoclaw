@@ -932,10 +932,13 @@ def kml_timespan(t1,t2,event_time=None,tz=None,tscale=1):
 
     return timestrbegin,timestrend
 
-def topo2kml(topo_file_name, topo_type, color='00FF00', crop_extent=None):
+def topo2kml(topo_file_name, topo_type, color='00FF00', crop_extent=None, id=''):
     """
     Create a kml file putting a box around the region covered by a topofile.
     Color is green by default.
+
+    crop_extent introduced for v5.15.0 topo changes
+    id can be added to distinguish between different topo grids from same file.
     """
 
     import os
@@ -949,9 +952,10 @@ def topo2kml(topo_file_name, topo_type, color='00FF00', crop_extent=None):
     else:
         xy = topo.extent
     print('+++ zy = ', xy)
-    name = os.path.splitext(os.path.split(topo_file_name)[-1])[0]
+    name = os.path.splitext(os.path.split(topo_file_name)[-1])[0] + id
     file_name = '%s.kml' % name
     box2kml(xy, file_name, name, color)
+    #import pdb; pdb.set_trace()  #XXX
 
 def dtopo2kml(dtopo_file_name, dtopo_type, color='8888FF'):
     """
@@ -1118,6 +1122,8 @@ def make_input_data_kmls(rundata=None, combined=False, dtopo_contours=False):
     fgout2kml(rundata)
 
     topofiles = rundata.topo_data.topofiles
+    nnew = 0
+
     for f in topofiles:
         # might be either old style list [topo_type, fname]
         # or new style from 5.15.0, a topotools.Topography object
@@ -1128,16 +1134,20 @@ def make_input_data_kmls(rundata=None, combined=False, dtopo_contours=False):
             crop_extent = None
         except:
             topo = f  # should be type clawpack.geoclaw.topotools.Topography
-            #assert type(topo) is ???
+            nnew += 1
+            id = f'_{nnew}'  # to make unique identifier for new-style topo
+            print(f'+++ new style kml will have id = {id}')
             topo_file_name = f.path
             topo_type = f.topo_type
             crop_extent = topo.crop_extent
             print('+++ New style, topo_file_name = ',topo_file_name)
+            print('+++ topo_type = ',topo_type)
             print('+++ crop_extent = ',crop_extent)
 
         if os.path.isfile(topo_file_name):
             try:
-                kmltools.topo2kml(topo_file_name, topo_type, crop_extent=crop_extent)
+                topo2kml(topo_file_name, topo_type,
+                                  crop_extent=crop_extent,id=id)  #XXX
             except:
                 print('*** problem reading topofile, proper topo_type?')
                 print('    ', topo_file_name)
