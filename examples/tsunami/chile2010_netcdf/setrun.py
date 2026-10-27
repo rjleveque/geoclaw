@@ -67,16 +67,14 @@ def setrun(claw_pkg='geoclaw'):
     # Number of space dimensions:
     clawdata.num_dim = num_dim
 
-    domain_extent = (-120, -60, -60, 0)
-    x_west, x_east, y_south, y_north = domain_extent  # unpack
-
     # Lower and upper edge of computational domain:
-    clawdata.lower[0] = x_west       # west longitude
-    clawdata.upper[0] = x_east       # east longitude
+    clawdata.lower[0] = x_west = -120
+    clawdata.upper[0] = x_east = -60
 
-    clawdata.lower[1] = y_south       # south latitude
-    clawdata.upper[1] = y_north       # north latitude
+    clawdata.lower[1] = y_south = -60
+    clawdata.upper[1] = y_north = 0
 
+    domain_extent = (x_west, x_east, y_south, y_north) # for use below
 
 
     # Number of grid cells: Coarsest grid
