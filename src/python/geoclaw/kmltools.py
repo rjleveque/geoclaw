@@ -955,7 +955,6 @@ def topo2kml(topo_file_name, topo_type, color='00FF00', crop_extent=None, id='')
     name = os.path.splitext(os.path.split(topo_file_name)[-1])[0] + id
     file_name = '%s.kml' % name
     box2kml(xy, file_name, name, color)
-    #import pdb; pdb.set_trace()  #XXX
 
 def dtopo2kml(dtopo_file_name, dtopo_type, color='8888FF'):
     """
@@ -966,12 +965,20 @@ def dtopo2kml(dtopo_file_name, dtopo_type, color='8888FF'):
     import os
     from clawpack.geoclaw import dtopotools
     dtopo = dtopotools.DTopography()
-    dtopo.read(dtopo_file_name, dtopo_type)
-    x1 = dtopo.x.min()
-    x2 = dtopo.x.max()
-    y1 = dtopo.y.min()
-    y2 = dtopo.y.max()
-    xy = (x1,x2,y1,y2)
+    if dtopo_type == 4:
+        # dtopo.read_header() not yet implemented for .nc files
+        dtopo.read(dtopo_file_name, dtopo_type)
+        x1 = dtopo.x.min()
+        x2 = dtopo.x.max()
+        y1 = dtopo.y.min()
+        y2 = dtopo.y.max()
+        dtopo.extent = (x1,x2,y1,y2)  # should be set by read and read_header
+    else:
+        # only need header:
+        dtopo.path = dtopo_file_name
+        dtopo.dtopo_type = dtopo_type
+        dtopo.read_header()
+    xy = dtopo.extent
     name = os.path.splitext(os.path.split(dtopo_file_name)[-1])[0]
     file_name = '%s.kml' % name
     box2kml(xy, file_name, name, color)
@@ -1132,6 +1139,7 @@ def make_input_data_kmls(rundata=None, combined=False, dtopo_contours=False):
             topo_type = f[0]
             print('+++ Old style, topo_file_name = ',topo_file_name)
             crop_extent = None
+            id = ''
         except:
             topo = f  # should be type clawpack.geoclaw.topotools.Topography
             nnew += 1
@@ -1147,7 +1155,7 @@ def make_input_data_kmls(rundata=None, combined=False, dtopo_contours=False):
         if os.path.isfile(topo_file_name):
             try:
                 topo2kml(topo_file_name, topo_type,
-                                  crop_extent=crop_extent,id=id)  #XXX
+                                  crop_extent=crop_extent,id=id)
             except:
                 print('*** problem reading topofile, proper topo_type?')
                 print('    ', topo_file_name)
@@ -1157,8 +1165,13 @@ def make_input_data_kmls(rundata=None, combined=False, dtopo_contours=False):
 
     dtopofiles = rundata.dtopo_data.dtopofiles
     for f in dtopofiles:
-        dtopo_file_name = f[-1]
-        dtopo_type = f[0]
+        try:
+            dtopo_file_name = f[-1]
+            dtopo_type = f[0]
+        except:
+            dtopo = f  # assume new v5.15.0 version
+            dtopo_file_name = dtopo.path
+            dtopo_type = dtopo.dtopo_type
         if os.path.isfile(dtopo_file_name):
             try:
                 dtopo2kml(dtopo_file_name, dtopo_type)
