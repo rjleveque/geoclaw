@@ -8,7 +8,7 @@ that will be read in by the Fortran code.
 
 import os
 import numpy as np
-from clawpack.geoclaw import topotools
+from clawpack.geoclaw import topotools, dtopotools
 
 try:
     CLAW = os.environ['CLAW']
@@ -68,7 +68,7 @@ def setrun(claw_pkg='geoclaw'):
     clawdata.num_dim = num_dim
 
     # Lower and upper edge of computational domain:
-    clawdata.lower[0] = x_west = -120
+    clawdata.lower[0] = x_west = -200
     clawdata.upper[0] = x_east = -60
 
     clawdata.lower[1] = y_south = -60
@@ -124,7 +124,7 @@ def setrun(claw_pkg='geoclaw'):
     if clawdata.output_style==1:
         # Output nout frames at equally spaced times up to tfinal:
         clawdata.num_output_times = 18
-        clawdata.tfinal = 9*3600.
+        clawdata.tfinal = 18*3600.
         clawdata.output_t0 = True  # output at initial (or restart) time?
 
     elif clawdata.output_style == 2:
@@ -282,12 +282,12 @@ def setrun(claw_pkg='geoclaw'):
     amrdata.max1d = 60
 
     # max number of refinement levels:
-    amrdata.amr_levels_max = 3
+    amrdata.amr_levels_max = 2
 
     # List of refinement ratios at each level (length at least mxnest-1)
-    amrdata.refinement_ratios_x = [2,6]
-    amrdata.refinement_ratios_y = [2,6]
-    amrdata.refinement_ratios_t = [2,6]
+    amrdata.refinement_ratios_x = [4,6]
+    amrdata.refinement_ratios_y = [4,6]
+    amrdata.refinement_ratios_t = [4,6]
 
 
     # Specify type of each aux variable in amrdata.auxtype.
@@ -338,7 +338,7 @@ def setrun(claw_pkg='geoclaw'):
     # to specify regions of refinement append lines of the form
     #  [minlevel,maxlevel,t1,t2,x1,x2,y1,y2]
     rundata.regiondata.regions.append([3, 3, 0., 10000., -77,-67,-40,-30])
-    rundata.regiondata.regions.append([3, 3, 8000., 26000., -90,-80,-30,-15])
+    #rundata.regiondata.regions.append([3, 3, 8000., 26000., -90,-80,-30,-15])
 
     # ---------------
     # Gauges:
@@ -377,14 +377,14 @@ def setrun(claw_pkg='geoclaw'):
     # Refinement settings
     refinement_data = rundata.refinement_data
     refinement_data.variable_dt_refinement_ratios = True
-    refinement_data.wave_tolerance = 1.e-1
+    refinement_data.wave_tolerance = 0.01
 
     # == settopo.data values ==
     topo_data = rundata.topo_data
     # for topography, append lines of the form
     #    [topotype, fname]
-    topo_path = os.path.join(scratch_dir, 'etopo10min120W60W60S0S.asc')
-    topo_data.topofiles.append([2, topo_path])
+    #topo_path = os.path.join(scratch_dir, 'etopo10min120W60W60S0S.asc')
+    #topo_data.topofiles.append([2, topo_path])
     
     # read directly from THREDDS server: (does not work)
     #topo_path = 'https://www.ngdc.noaa.gov/thredds/dodsC/global/ETOPO2022/30s/30s_bed_elev_netcdf/ETOPO_2022_v1_30s_N90W180_bed.nc'
@@ -395,27 +395,34 @@ def setrun(claw_pkg='geoclaw'):
     topo.path = topo_path
     topo.topo_type = 4  # netCDF
     #topo.crop_extent = domain_extent  # computational domain
-    topo.crop_extent = [-120,-80, -60, 0]
+    #topo.crop_extent = [-200,-80, -60, 0]
+    topo.crop_extent = [-200,-60, -60, 0]
+    #topo.x_shift = -360
     topo.buffer = 1  # buffer to make sure domain is covered
     topo.coarsen = 20 # coarsen from 30 arcsec to 10 arcmin
     topo_data.topofiles.append(topo)
 
-    # new style:
-    topo = topotools.Topography()
-    topo.path = topo_path
-    topo.topo_type = 4  # netCDF
-    #topo.crop_extent = domain_extent  # computational domain
-    topo.crop_extent = [-80,-50, -60, 0]
-    topo.buffer = 1  # buffer to make sure domain is covered
-    topo.coarsen = 20 # coarsen from 30 arcsec to 10 arcmin
-    topo_data.topofiles.append(topo)
+    if 0:
+        # new style:
+        topo = topotools.Topography()
+        topo.path = topo_path
+        topo.topo_type = 4  # netCDF
+        #topo.crop_extent = domain_extent  # computational domain
+        topo.crop_extent = [360-80,360-50, -60, 0]
+        topo.x_shift = -360
+        topo.buffer = 1  # buffer to make sure domain is covered
+        topo.coarsen = 20 # coarsen from 30 arcsec to 10 arcmin
+        topo_data.topofiles.append(topo)
 
     # == setdtopo.data values ==
     dtopo_data = rundata.dtopo_data
     # for moving topography, append lines of the form :   (<= 1 allowed for now!)
     #   [topotype, fname]
-    dtopo_path = os.path.join(scratch_dir, 'dtopo_usgs100227.tt3')
-    dtopo_data.dtopofiles.append([3,dtopo_path])
+    #dtopo_path = os.path.join(scratch_dir, 'dtopo_usgs100227.tt3')
+    dtopo = dtopotools.DTopography()
+    dtopo.path = 'usgs_dtopo.nc'
+    dtopo.dtopo_type = 4
+    dtopo_data.dtopofiles.append(dtopo)
     dtopo_data.dt_max_dtopo = 0.2
 
 
